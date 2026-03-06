@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Remote Subagent Protocol | Playground</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #f6f8f3;
+      --bg-card: #fdfefb;
+      --bg-accent: #e4ecd8;
+      --ink: #1f2937;
+      --muted: #5b6472;
+      --line: #d4dfc6;
+      --brand: #5c7a29;
+      --brand-deep: #3a5118;
+      --buyer: #0f766e;
+      --seller: #2563eb;
+      --platform: #4a6521;
+      --shadow: 0 14px 34px rgba(17, 24, 39, 0.08);
+      --radius: 16px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% -10%, #c9d9b1 0, transparent 38%),
+        radial-gradient(circle at 110% 5%, #bfdbfe 0, transparent 32%),
+        var(--bg);
+      font-family: "Space Grotesk", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      line-height: 1.55;
+    }
+
+    .wrap {
+      max-width: 1260px;
+      margin: 0 auto;
+      padding: 28px 20px 44px;
+    }
+
+    .hero {
+      background: linear-gradient(135deg, #eff4e8 0%, #f8faf5 55%, #eef7ff 100%);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      animation: rise 0.5s ease;
+    }
+
+    .hero h1 {
+      margin: 0;
+      font-size: clamp(1.5rem, 2vw, 2rem);
+      letter-spacing: 0.01em;
+    }
+
+    .hero p {
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 0.98rem;
+      max-width: 860px;
+    }
+
+    .badge-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+    }
+
+    .badge {
+      border: 1px solid #c9d9b1;
+      background: #fff;
+      color: #3a5118;
+      padding: 6px 12px;
+      border-radius: 999px;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    .defaults {
+      margin-top: 18px;
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 10px;
+    }
+
+    .default-card {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      min-height: 84px;
+    }
+
+    .default-card .k {
+      color: var(--muted);
+      font-size: 0.74rem;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+
+    .default-card .v {
+      margin-top: 6px;
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--brand-deep);
+    }
+
+    .panel {
+      background: var(--bg-card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-h {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .panel-h h2 {
+      margin: 0;
+      font-size: 1rem;
+    }
+
+    .panel-h span {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .view-panel {
+      margin-top: 16px;
+      animation: rise 0.28s ease;
+    }
+
+    .alignment-note {
+      margin-top: 12px;
+      border: 1px dashed #c9d9b1;
+      border-radius: 12px;
+      padding: 12px;
+      background: #f4f7f0;
+      color: #2e4113;
+      font-size: 0.86rem;
+    }
+
+    .alignment-note code {
+      background: rgba(255, 255, 255, 0.8);
+      border: 1px solid #c9d9b1;
+      border-radius: 5px;
+      padding: 1px 5px;
+      color: #2e4113;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .steps {
+      max-height: 72vh;
+      overflow: auto;
+      padding: 10px;
+    }
+
+    .step-btn {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 12px;
+      margin: 8px 0;
+      text-align: left;
+      padding: 12px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      animation: rise 0.35s ease both;
+    }
+
+    .step-btn:hover {
+      transform: translateY(-1px);
+      border-color: #c9d9b1;
+    }
+
+    .step-btn.active {
+      border-color: var(--brand);
+      box-shadow: 0 0 0 2px rgba(92, 122, 41, 0.14);
+      background: #f4f7f0;
+    }
+
+    .step-btn.executed {
+      border-color: #b7ce96;
+      background: #fbfdf7;
+    }
+
+    .step-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .step-id {
+      font-size: 0.72rem;
+      color: var(--muted);
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .phase {
+      font-size: 0.72rem;
+      border-radius: 999px;
+      padding: 2px 8px;
+      border: 1px solid #c9d9b1;
+      background: #fff;
+      color: #3a5118;
+      font-weight: 700;
+    }
+
+    .step-title {
+      margin-top: 6px;
+      font-weight: 700;
+      font-size: 0.96rem;
+    }
+
+    .step-sub {
+      margin-top: 4px;
+      font-size: 0.84rem;
+      color: var(--muted);
+    }
+
+    .actor-chip {
+      display: inline-flex;
+      margin-top: 8px;
+      border-radius: 999px;
+      font-size: 0.74rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border: 1px solid transparent;
+    }
+
+    .actor-chip.user,
+    .actor-chip.buyer {
+      background: #e8faf7;
+      border-color: #b5e6df;
+      color: var(--buyer);
+    }
+
+    .actor-chip.seller {
+      background: #eaf2ff;
+      border-color: #c9dbff;
+      color: var(--seller);
+    }
+
+    .actor-chip.platform {
+      background: #f4f7f0;
+      border-color: #c9d9b1;
+      color: var(--platform);
+    }
+
+    .detail {
+      padding: 16px;
+      animation: rise 0.35s ease;
+    }
+
+    .detail h3 {
+      margin: 0;
+      font-size: 1.18rem;
+    }
+
+    .meta {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .meta-grid {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .mini {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .mini .label {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    .mini .value {
+      margin-top: 6px;
+      font-size: 0.92rem;
+      font-weight: 600;
+      word-break: break-all;
+    }
+
+    .block {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      background: #fff;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+
+    .block-h {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
+      background: #f4f7f0;
+      font-size: 0.82rem;
+      color: #3a5118;
+      font-weight: 700;
+    }
+
+    .copy-btn {
+      border: 1px solid #c9d9b1;
+      background: #fff;
+      color: #3a5118;
+      border-radius: 8px;
+      padding: 4px 8px;
+      font-size: 0.74rem;
+      cursor: pointer;
+    }
+
+    .runner-toolbar {
+      margin-top: 12px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .runner-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .runner-btn {
+      border: 1px solid #c9d9b1;
+      background: #fff;
+      color: #3a5118;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.78rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .runner-btn:hover {
+      background: #f4f7f0;
+    }
+
+    .runner-btn.primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+    }
+
+    .runner-btn.primary:hover {
+      background: #4f6c23;
+      border-color: #4f6c23;
+    }
+
+    .exec-status {
+      border: 1px dashed #c9d9b1;
+      border-radius: 10px;
+      padding: 8px 10px;
+      color: #3a5118;
+      background: #f4f7f0;
+      font-size: 0.82rem;
+      min-height: 36px;
+      display: flex;
+      align-items: center;
+    }
+
+    .option-panel {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #fff;
+      padding: 10px;
+    }
+
+    .option-panel label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      font-weight: 700;
+    }
+
+    .option-select {
+      width: 100%;
+      border: 1px solid #c9d9b1;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.86rem;
+      color: var(--ink);
+      background: #fff;
+      outline: none;
+    }
+
+    .option-hint {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+
+    pre {
+      margin: 0;
+      max-height: 260px;
+      overflow: auto;
+      padding: 12px;
+      font-size: 0.78rem;
+      line-height: 1.5;
+      background: #fff;
+      color: #1f2937;
+      font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+
+    .flow {
+      margin-top: 12px;
+      border: 1px dashed #c9d9b1;
+      background: #f4f7f0;
+      border-radius: 12px;
+      padding: 12px;
+      font-size: 0.88rem;
+      color: #3a5118;
+    }
+
+    .flow strong {
+      color: #2e4113;
+    }
+
+    .ops {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .ops-card {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+    }
+
+    .ops-card h4 {
+      margin: 0 0 8px;
+      font-size: 0.98rem;
+    }
+
+    .ops-card ul {
+      margin: 0;
+      padding-left: 16px;
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+
+    .ops-card li + li {
+      margin-top: 4px;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    @media (max-width: 1120px) {
+      .defaults {
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+      }
+
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .steps {
+        max-height: none;
+      }
+
+      .runner-toolbar {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 760px) {
+      .wrap {
+        padding: 14px 12px 28px;
+      }
+
+      .hero {
+        padding: 18px;
+        border-radius: 18px;
+      }
+
+      .defaults {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+      }
+
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .ops {
+        grid-template-columns: 1fr;
+      }
+
+      pre {
+        max-height: 220px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <p style="margin-bottom:12px"><a href="../README.md" style="color:var(--brand);text-decoration:none;font-size:0.9rem">← 返回仓库说明</a></p>
+      <h1>Remote Subagent Protocol Playground</h1>
+      <p>这是协议主库中的 reference playground。它只演示协议步骤、控制面交互、`L0 local transport` 联调语义、ACK、签名验收与错误分支，不承载 marketplace 排序、定价、转化或运营叙事。</p>
+      <div class="badge-row">
+        <span class="badge">v0.1</span>
+        <span class="badge">API Key</span>
+        <span class="badge">L0 local transport</span>
+        <span class="badge">delivery-meta request scoped</span>
+        <span class="badge">ACKED-only events</span>
+        <span class="badge">Ed25519 result signature</span>
+      </div>
+      <div class="defaults">
+        <div class="default-card"><div class="k">ack_deadline_s</div><div class="v">120s</div></div>
+        <div class="default-card"><div class="k">token_ttl_seconds</div><div class="v">900s</div></div>
+        <div class="default-card"><div class="k">hard_timeout_s</div><div class="v">300s</div></div>
+        <div class="default-card"><div class="k">heartbeat</div><div class="v">30s (degraded 90 / offline 180)</div></div>
+        <div class="default-card"><div class="k">catalog filter</div><div class="v">status=active + healthy first</div></div>
+      </div>
+    </section>
+
+    <div class="alignment-note">
+      对齐规则：<code>POST /v1/users/register</code> 只创建用户主体并默认激活 buyer；seller 能力在 agent 审核导入成功后激活。
+      目录接口 <code>GET /v1/catalog/subagents</code> 不返回 <code>delivery_address</code>，Buyer 在拿到 token 后通过
+      <code>POST /v1/requests/{request_id}/delivery-meta</code> 单次申请投递元数据。当前 playground 的数据面以
+      <code>L0 local transport</code> 语义为主，不依赖 marketplace 页面。
+    </div>
+
+    <section id="protocolView" class="view-panel" style="display:block">
+      <section class="layout">
+        <article class="panel">
+          <div class="panel-h">
+            <h2>协议实操步骤</h2>
+            <span id="stepCounter">1 / 14</span>
+          </div>
+          <div class="steps" id="stepList"></div>
+        </article>
+
+        <article class="panel detail">
+          <h3 id="detailTitle">-</h3>
+          <div class="meta" id="detailSummary"></div>
+
+          <div class="meta-grid">
+            <div class="mini"><div class="label">角色</div><div class="value" id="detailActor"></div></div>
+            <div class="mini"><div class="label">阶段</div><div class="value" id="detailPhase"></div></div>
+            <div class="mini"><div class="label">接口 / 通道</div><div class="value" id="detailEndpoint"></div></div>
+            <div class="mini"><div class="label">成功信号</div><div class="value" id="detailSignal"></div></div>
+          </div>
+
+          <div class="runner-toolbar">
+            <div class="runner-nav">
+              <button class="runner-btn" id="prevStepBtn">上一步</button>
+              <button class="runner-btn primary" id="execStepBtn">执行当前步骤</button>
+              <button class="runner-btn" id="nextStepBtn">下一步</button>
+            </div>
+            <div class="exec-status" id="execStatus">尚未执行当前步骤</div>
+            <button class="runner-btn" id="clearLogBtn">清空执行记录</button>
+          </div>
+
+          <div class="option-panel">
+            <label for="stepOptionSelect">输入场景（仅作用于当前步骤）</label>
+            <select class="option-select" id="stepOptionSelect"></select>
+            <div class="option-hint" id="stepOptionHint"></div>
+          </div>
+
+          <div class="block">
+            <div class="block-h">
+              <span>示例请求</span>
+              <button class="copy-btn" data-copy="request">复制</button>
+            </div>
+            <pre id="requestCode"></pre>
+          </div>
+
+          <div class="block">
+            <div class="block-h">
+              <span>示例响应 / 输出</span>
+              <button class="copy-btn" data-copy="response">复制</button>
+            </div>
+            <pre id="responseCode"></pre>
+          </div>
+
+          <div class="flow" id="detailFlow"></div>
+
+          <div class="block">
+            <div class="block-h">
+              <span>执行日志（当前会话）</span>
+            </div>
+            <pre id="execLog"></pre>
+          </div>
+        </article>
+      </section>
+
+      <section class="ops">
+        <article class="ops-card">
+          <h4>Buyer 必做</h4>
+          <ul>
+            <li>完成用户注册并保管 API Key</li>
+            <li>目录筛选 + 模板包拉取后再组装合约</li>
+            <li>先申请 token，再申请 request-scoped delivery-meta</li>
+            <li>通过 transport adapter 投递任务后轮询 ACK 并验签</li>
+            <li>上报 buyer 侧指标事件</li>
+          </ul>
+        </article>
+        <article class="ops-card">
+          <h4>Seller 必做</h4>
+          <ul>
+            <li>先提交 subagent 草案并通过审核导入</li>
+            <li>seller scope 激活后才能调用卖家接口</li>
+            <li>在线 introspect 校验 token（v0.1 必做）</li>
+            <li>先 ACK 再执行，按 request_id 幂等</li>
+            <li>签名结果包并按 thread_hint / request_id 语义回传</li>
+          </ul>
+        </article>
+        <article class="ops-card">
+          <h4>Platform 必做</h4>
+          <ul>
+            <li>注册用户并签发 API Key（默认 buyer）</li>
+            <li>审核导入 subagent，写入 owner/seller/subagent 绑定</li>
+            <li>签发 token 与下发 delivery-meta</li>
+            <li>接收 ACK 事件与心跳状态</li>
+            <li>聚合 call_volume 与稳定性硬指标</li>
+          </ul>
+        </article>
+      </section>
+    </section>
+  </div>
+
+  <script>
+    const steps = [
+      {
+        id: "S01",
+        phase: "Identity",
+        actor: "User",
+        title: "用户注册（默认 buyer）",
+        summary: "注册接口仅创建用户主体并默认激活 buyer scope，同时签发 API Key。",
+        endpoint: "POST /v1/users/register",
+        signal: "返回 user_id + roles=[buyer] + api_key",
+        request: {
+          display_name: "FoxLab Operator",
+          contact_email: "ops@foxlab.example",
+          organization_name: "FoxLab AI Studio",
+          locale: "zh-CN"
+        },
+        response: {
+          user_id: "user_01htz0demo",
+          contact_email: "ops@foxlab.example",
+          roles: ["buyer"],
+          api_key: "sk_live_once_only_xxx",
+          created_at: "2026-03-06T08:00:00Z"
+        },
+        flow: "<strong>下一步：</strong>该用户可提交 seller agent 草案；此时尚未激活 seller scope。"
+      },
+      {
+        id: "S02",
+        phase: "Catalog Onboarding",
+        actor: "User",
+        title: "提交 seller agent 草案",
+        summary: "提交 subagent 草案进入审核，owner_user_id 必须与当前 API Key 绑定 user_id 一致。",
+        endpoint: "POST /v1/catalog/subagents",
+        signal: "返回 draft_pending_review + review_status=pending",
+        request: {
+          owner_user_id: "user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          display_name: "FoxLab Text Classifier",
+          description: "Classify customer support tickets with strict schema output",
+          capabilities: ["classification", "customer_support"],
+          version: "1.0.0",
+          status: "draft_pending_review",
+          delivery_address: "tasks@foxlab.example",
+          contact: { email: "ops@foxlab.example" },
+          support_email: "support@foxlab.example",
+          supported_task_types: ["text_classification"],
+          constraints: { max_budget_cap: 0.05, max_hard_timeout_s: 300 },
+          seller_public_key_pem: "-----BEGIN PUBLIC KEY-----\\nREPLACE_FOXLAB\\n-----END PUBLIC KEY-----",
+          template_ref: "docs/templates/subagents/foxlab.text.classifier.v1/"
+        },
+        response: {
+          owner_user_id: "user_01htz0demo",
+          seller_id: "seller_user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          status: "draft_pending_review",
+          review_status: "pending",
+          submitted_at: "2026-03-06T08:10:00Z"
+        },
+        flow: "<strong>下一步：</strong>平台按 form_submit_then_cli_review_import 流程审核导入。"
+      },
+      {
+        id: "S03",
+        phase: "Catalog Onboarding",
+        actor: "Platform",
+        title: "审核导入并激活 seller 角色",
+        summary: "审核通过后执行导入，写入 owner_user_id -> seller_id -> subagent_id 绑定并激活 seller scope。",
+        endpoint: "Reviewer + Import CLI Pipeline",
+        signal: "目录条目生效，seller scope 激活",
+        request: {
+          command: "crocctl catalog import --input docs/templates/catalog-subagents.import.template.ndjson --reviewer ops_admin --apply",
+          checks: ["schema_valid", "template_ref_exists", "resource_binding", "support_email_present"],
+          review_result: "APPROVED"
+        },
+        response: {
+          import_batch_id: "batch_20260306_01",
+          catalog_version: 12,
+          seller_id: "seller_user_01htz0demo",
+          review_status: "approved",
+          seller_scope_activated: true,
+          status: "active"
+        },
+        flow: "<strong>下一步：</strong>Buyer 开始目录检索并选择可调用 subagent。"
+      },
+      {
+        id: "S04",
+        phase: "Discovery",
+        actor: "Buyer",
+        title: "Buyer 查询目录并挑选候选",
+        summary: "MVP 默认遍历 + 分类过滤，目录返回筛选字段，不直接返回 delivery_address。",
+        endpoint: "GET /v1/catalog/subagents",
+        signal: "拿到 candidate + seller_public_key_pem + template_ref",
+        request: {
+          method: "GET",
+          path: "/v1/catalog/subagents?capability=classification&status=active&availability_status=healthy&page_size=20",
+          headers: {
+            Authorization: "Bearer sk_live_once_only_xxx"
+          }
+        },
+        response: {
+          items: [
+            {
+              subagent_id: "foxlab.text.classifier.v1",
+              seller_id: "seller_user_01htz0demo",
+              display_name: "FoxLab Text Classifier",
+              capabilities: ["classification", "customer_support"],
+              supported_task_types: ["text_classification"],
+              version: "1.0.0",
+              status: "active",
+              availability_status: "healthy",
+              last_heartbeat_at: "2026-03-06T08:19:30Z",
+              sla_hint: { p95_exec_ms: 3500, timeout_rate_7d: 0.02 },
+              pricing_hint: { currency: "USD", per_request: 0.02 },
+              eta_hint: { exec_p95_s: 120 },
+              seller_public_key_pem: "-----BEGIN PUBLIC KEY-----...",
+              delivery_meta_mode: "request_scoped",
+              template_ref: "docs/templates/subagents/foxlab.text.classifier.v1/"
+            }
+          ],
+          next_page_token: null
+        },
+        flow: "<strong>下一步：</strong>拉取模板包，生成本次 request 的合约正文。"
+      },
+      {
+        id: "S05",
+        phase: "Discovery",
+        actor: "Buyer",
+        title: "拉取模板包构造合约",
+        summary: "通过 template_ref 获取 input/output schema 与示例，减少买卖双方契约偏差。",
+        endpoint: "GET /v1/catalog/subagents/{subagent_id}/template-bundle",
+        signal: "返回 input_schema + output_schema + example_contract/result",
+        request: {
+          method: "GET",
+          path: "/v1/catalog/subagents/foxlab.text.classifier.v1/template-bundle?template_ref=docs/templates/subagents/foxlab.text.classifier.v1/",
+          headers: {
+            Authorization: "Bearer sk_live_once_only_xxx",
+            "If-None-Match": "\"tmpl_prev_digest\""
+          }
+        },
+        response: {
+          subagent_id: "foxlab.text.classifier.v1",
+          template_ref: "docs/templates/subagents/foxlab.text.classifier.v1/",
+          template_version: "2026-03-06T08:00:00Z",
+          input_schema: { type: "object" },
+          output_schema: { type: "object" },
+          example_contract: { request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41" },
+          example_result: { request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41", status: "ok" }
+        },
+        flow: "<strong>下一步：</strong>Buyer 为该 request 申请短期 task token。"
+      },
+      {
+        id: "S06",
+        phase: "Authorization",
+        actor: "Buyer",
+        title: "Buyer 申请 task token",
+        summary: "任务授权按 request_id 绑定，TTL 默认 900 秒。",
+        endpoint: "POST /v1/tokens/task",
+        signal: "返回 task_token + claims",
+        request: {
+          request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+          buyer_id: "user_01htz0demo",
+          seller_id: "seller_user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          budget_cap: 0.05,
+          ttl_seconds: 900
+        },
+        response: {
+          task_token: "<JWT_OR_EQUIVALENT>",
+          claims: {
+            iss: "croc-platform",
+            aud: "seller_user_01htz0demo",
+            sub: "user_01htz0demo",
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            subagent_id: "foxlab.text.classifier.v1"
+          }
+        },
+        flow: "<strong>下一步：</strong>通过 request-scoped delivery-meta 获取本次投递地址和线程策略。"
+      },
+      {
+        id: "S07",
+        phase: "Authorization",
+        actor: "Buyer",
+        title: "申请单次投递元数据（delivery-meta）",
+        summary: "目录不暴露 delivery_address；由 buyer 在 token 后按 request_id 单次拉取。",
+        endpoint: "POST /v1/requests/{request_id}/delivery-meta",
+        signal: "返回 delivery_address + thread_policy + seller_public_key_pem",
+        request: {
+          request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+          seller_id: "seller_user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          task_token: "<JWT_OR_EQUIVALENT>"
+        },
+        response: {
+          request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+          seller_id: "seller_user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          delivery_address: "tasks@foxlab.example",
+          thread_policy: {
+            subject_prefix: "[CROC][TASK]",
+            reply_mode: "same_thread_required"
+          },
+          seller_public_key_pem: "-----BEGIN PUBLIC KEY-----..."
+        },
+        flow: "<strong>下一步：</strong>Buyer 使用 delivery-meta 与 transport adapter 发送任务请求。"
+      },
+      {
+        id: "S08",
+        phase: "Delivery",
+        actor: "Buyer",
+        title: "Buyer 通过 Transport Adapter 派发任务",
+        summary: "数据面通过 transport adapter 发送标准 envelope；当前参考实现使用 L0 local transport。",
+        endpoint: "POST /controller/requests/{request_id}/dispatch (L0 local transport)",
+        signal: "任务已派发并进入本地请求状态机",
+        request: {
+          envelope: {
+            message_id: "msg_018f9d5e_dispatch",
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            thread_hint: "croc-req-018f9d5e",
+            from: "buyer-controller",
+            to: "seller-controller",
+            message_type: "task_contract",
+            created_at: "2026-03-06T08:21:21Z",
+            payload: {
+              contract_version: "0.1.0",
+              buyer: { buyer_id: "user_01htz0demo", reply_to: "buyer+mvp@croc.tavern" },
+              seller: { seller_id: "seller_user_01htz0demo", subagent_id: "foxlab.text.classifier.v1" },
+              constraints: { budget_cap: 0.05, soft_timeout_s: 90, hard_timeout_s: 300 },
+              token: "<TASK_TOKEN>"
+            }
+          }
+        },
+        response: {
+          dispatch_status: "SENT",
+          dispatched_at: "2026-03-06T08:21:21Z"
+        },
+        flow: "<strong>下一步：</strong>Seller 收到任务后先调用 introspect。"
+      },
+      {
+        id: "S09",
+        phase: "Seller Intake",
+        actor: "Seller",
+        title: "Seller 在线 introspect 校验 token",
+        summary: "v0.1 冻结：卖家必须在线校验 token，且需命中 seller scope + 资源归属。",
+        endpoint: "POST /v1/tokens/introspect",
+        signal: "active=true 且 claims 匹配",
+        request: {
+          task_token: "<JWT_OR_EQUIVALENT>"
+        },
+        response: {
+          active: true,
+          claims: {
+            iss: "croc-platform",
+            aud: "seller_user_01htz0demo",
+            sub: "user_01htz0demo",
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            subagent_id: "foxlab.text.classifier.v1",
+            exp: 1770005100
+          }
+        },
+        flow: "<strong>下一步：</strong>Seller 通过校验后立即 ACK，避免 Buyer 盲等。"
+      },
+      {
+        id: "S10",
+        phase: "Seller Intake",
+        actor: "Seller",
+        title: "Seller 上报 ACK 事件",
+        summary: "ACK 属于 v0.1 唯一事件类型，平台按 request_id 幂等处理。",
+        endpoint: "POST /v1/requests/{request_id}/ack",
+        signal: "Buyer 在 ack_deadline 内查询到 ACKED",
+        request: {
+          seller_id: "seller_user_01htz0demo",
+          subagent_id: "foxlab.text.classifier.v1",
+          accepted_at: "2026-03-06T08:21:30Z",
+          ack_deadline_s: 120,
+          estimated_finish_at: "2026-03-06T08:22:40Z",
+          message: "queued"
+        },
+        response: {
+          request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+          event_type: "ACKED",
+          accepted: true,
+          accepted_at: "2026-03-06T08:21:30Z"
+        },
+        flow: "<strong>下一步：</strong>Seller 执行任务并按 request_id 语义回传签名结果。"
+      },
+      {
+        id: "S11",
+        phase: "Execution",
+        actor: "Seller",
+        title: "Seller 执行并回传结果包",
+        summary: "Seller 生成结构化结果包并签名，当前参考实现由 Buyer Controller 直接接收结果。",
+        endpoint: "Local Transport Result Delivery",
+        signal: "Buyer 收到 result_package 且签名可验证",
+        request: {
+          transport_message: {
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            message_type: "result_package"
+          },
+          payload: {
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            result_version: "0.1.0",
+            seller_id: "seller_user_01htz0demo",
+            subagent_id: "foxlab.text.classifier.v1",
+            status: "ok",
+            output: { label: "refund_request", confidence: 0.94 },
+            signature: "seller_sig_v1:base64..."
+          }
+        },
+        response: {
+          status: "SENT",
+          delivery: "accepted",
+          finished_at: "2026-03-06T08:22:38Z"
+        },
+        flow: "<strong>下一步：</strong>Buyer 轮询 ACK 与结果后执行签名 + schema 双校验。"
+      },
+      {
+        id: "S12",
+        phase: "Acceptance",
+        actor: "Buyer",
+        title: "Buyer 查询事件并验收结果",
+        summary: "先确认 ACK，再验证结果包 request_id/签名/schema，写入终态。",
+        endpoint: "GET /v1/requests/{request_id}/events + Buyer Controller Result Poll",
+        signal: "进入 SUCCEEDED / FAILED / UNVERIFIED / TIMED_OUT",
+        request: {
+          event_poll: {
+            method: "GET",
+            path: "/v1/requests/018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41/events"
+          },
+          result_poll: {
+            thread_hint: "croc-req-018f9d5e",
+            timeout_policy: { ack_deadline_s: 120, hard_timeout_s: 300 }
+          }
+        },
+        response: {
+          events: [
+            {
+              event_type: "ACKED",
+              seller_id: "seller_user_01htz0demo",
+              subagent_id: "foxlab.text.classifier.v1",
+              timestamp: "2026-03-06T08:21:30Z"
+            }
+          ],
+          validation: {
+            request_id_match: true,
+            signature_valid: true,
+            schema_valid: true
+          },
+          final_status: "SUCCEEDED"
+        },
+        flow: "<strong>下一步：</strong>买卖双方继续上报观测事件，平台聚合硬指标。"
+      },
+      {
+        id: "S13",
+        phase: "Observability",
+        actor: "Seller",
+        title: "Seller 心跳上报",
+        summary: "心跳决定 availability_status，影响 Buyer 在目录中的路由选择。",
+        endpoint: "POST /v1/sellers/{seller_id}/heartbeat",
+        signal: "availability_status 维持 healthy",
+        request: {
+          seller_id: "seller_user_01htz0demo",
+          timestamp: "2026-03-06T08:23:00Z",
+          queue_depth: 2,
+          est_exec_p95_s: 110
+        },
+        response: {
+          accepted: true,
+          seller_id: "seller_user_01htz0demo",
+          availability_status: "healthy",
+          received_at: "2026-03-06T08:23:00Z"
+        },
+        flow: "<strong>下一步：</strong>平台将可用性写回目录，供后续 Buyer 请求筛选。"
+      },
+      {
+        id: "S14",
+        phase: "Observability",
+        actor: "Platform",
+        title: "指标上报与聚合展示",
+        summary: "MVP 对外展示硬指标：call_volume、成功率、超时率、schema 合规率。",
+        endpoint: "POST /v1/metrics/events + GET /v1/metrics/summary",
+        signal: "输出可展示榜单与质量趋势",
+        request: {
+          ingest: {
+            source: "buyer",
+            event_type: "request_succeeded",
+            request_id: "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+            buyer_id: "user_01htz0demo",
+            seller_id: "seller_user_01htz0demo",
+            subagent_id: "foxlab.text.classifier.v1",
+            timestamp: "2026-03-06T08:22:42Z"
+          },
+          summary_query: {
+            method: "GET",
+            path: "/v1/metrics/summary?window=7d&subagent_id=foxlab.text.classifier.v1&min_samples=30"
+          }
+        },
+        response: {
+          window: "7d",
+          subagent_id: "foxlab.text.classifier.v1",
+          call_volume: 120,
+          success_rate: 0.94,
+          timeout_rate: 0.03,
+          schema_compliance_rate: 0.98,
+          p95_exec_ms: 4100,
+          sample_size: 120
+        },
+        flow: "<strong>结果：</strong>v0.1 先落硬指标；积分与更复杂排序信号留到后续版本。"
+      }
+    ];
+
+    const edgeRequestPatchByStep = {
+      S01: { locale: "en-US", organization_name: "FoxLab AI Studio Global" },
+      S02: { constraints: { max_budget_cap: 0.08, max_hard_timeout_s: 420 } },
+      S03: { checks: ["schema_valid", "template_ref_exists", "resource_binding"] },
+      S04: { path: "/v1/catalog/subagents?capability=classification&status=active&page_size=100" },
+      S05: { headers: { "If-None-Match": "\"tmpl_20260306_cached\"" } },
+      S06: { budget_cap: 0.03, ttl_seconds: 600 },
+      S07: { task_token: "<JWT_SHORT_LIVED_TOKEN>" },
+      S08: { envelope: { constraints: { budget_cap: 0.03, soft_timeout_s: 60, hard_timeout_s: 240 } } },
+      S09: { task_token: "<JWT_SHORT_LIVED_TOKEN>" },
+      S10: { estimated_finish_at: "2026-03-06T08:24:50Z", queue_position: 5 },
+      S11: { payload: { output: { label: "billing_issue", confidence: 0.89 } } },
+      S12: { result_poll: { timeout_policy: { ack_deadline_s: 120, hard_timeout_s: 240 } } },
+      S13: { queue_depth: 7, est_exec_p95_s: 140 },
+      S14: { summary_query: { path: "/v1/metrics/summary?window=24h&subagent_id=foxlab.text.classifier.v1&min_samples=10" } }
+    };
+
+    const edgeResponsePatchByStep = {
+      S01: { created_at: "2026-03-06T08:01:30Z" },
+      S02: { submitted_at: "2026-03-06T08:12:00Z" },
+      S03: { catalog_version: 13 },
+      S04: { next_page_token: "cursor_page_2_demo" },
+      S05: { template_version: "2026-03-06T08:20:00Z" },
+      S06: { claims: { exp: 1770004700 } },
+      S07: { seller_public_key_pem: "-----BEGIN PUBLIC KEY-----\\nROTATED_KEY\\n-----END PUBLIC KEY-----" },
+      S08: { dispatched_at: "2026-03-06T08:21:45Z" },
+      S09: { claims: { exp: 1770004700 } },
+      S10: { accepted_at: "2026-03-06T08:21:52Z" },
+      S11: { sent_at: "2026-03-06T08:23:10Z" },
+      S12: { final_status: "SUCCEEDED" },
+      S13: { availability_status: "degraded" },
+      S14: { window: "24h", sample_size: 58, timeout_rate: 0.05 }
+    };
+
+    const errorMetaByStep = {
+      S01: { status: 400, code: "VALIDATION_FAILED", message: "contact_email 格式非法" },
+      S02: { status: 403, code: "AUTH_RESOURCE_FORBIDDEN", message: "owner_user_id 与调用方不匹配" },
+      S03: { status: 409, code: "REVIEW_REJECTED", message: "审核未通过，需补充模板字段" },
+      S04: { status: 429, code: "PLATFORM_RATE_LIMITED", message: "目录查询触发限流" },
+      S05: { status: 404, code: "TEMPLATE_NOT_FOUND", message: "template_ref 未命中" },
+      S06: { status: 403, code: "AUTH_SCOPE_FORBIDDEN", message: "缺少 buyer scope" },
+      S07: { status: 409, code: "DELIVERY_META_MISMATCH", message: "request 与 token 绑定不一致" },
+      S08: { status: 502, code: "DELIVERY_CHANNEL_ERROR", message: "transport adapter 派发失败" },
+      S09: { status: 401, code: "AUTH_INVALID_TOKEN", message: "token 已过期或无效" },
+      S10: { status: 403, code: "AUTH_SCOPE_FORBIDDEN", message: "seller scope 尚未激活" },
+      S11: { status: 502, code: "DELIVERY_RESULT_NOT_RECEIVED", message: "结果包未成功回传" },
+      S12: { status: 422, code: "RESULT_SCHEMA_INVALID", message: "结果包结构校验失败" },
+      S13: { status: 503, code: "SELLER_HEARTBEAT_STALE", message: "心跳过期，状态降级" },
+      S14: { status: 500, code: "PLATFORM_METRICS_AGG_FAILED", message: "指标聚合任务失败" }
+    };
+
+    const state = {
+      activeIndex: 0,
+      selectedOptionByStep: {},
+      executedSteps: {},
+      executionLog: []
+    };
+
+    const optionCache = {};
+
+    const stepList = document.getElementById("stepList");
+    const stepCounter = document.getElementById("stepCounter");
+    const detailTitle = document.getElementById("detailTitle");
+    const detailSummary = document.getElementById("detailSummary");
+    const detailActor = document.getElementById("detailActor");
+    const detailPhase = document.getElementById("detailPhase");
+    const detailEndpoint = document.getElementById("detailEndpoint");
+    const detailSignal = document.getElementById("detailSignal");
+    const requestCode = document.getElementById("requestCode");
+    const responseCode = document.getElementById("responseCode");
+    const detailFlow = document.getElementById("detailFlow");
+    const stepOptionSelect = document.getElementById("stepOptionSelect");
+    const stepOptionHint = document.getElementById("stepOptionHint");
+    const execStatus = document.getElementById("execStatus");
+    const execLog = document.getElementById("execLog");
+
+    function deepClone(value) {
+      if (value === undefined) return undefined;
+      return JSON.parse(JSON.stringify(value));
+    }
+
+    function isObject(value) {
+      return value && typeof value === "object" && !Array.isArray(value);
+    }
+
+    function deepMerge(base, patch) {
+      if (patch === undefined) return deepClone(base);
+      if (Array.isArray(patch)) return deepClone(patch);
+      if (!isObject(patch)) return deepClone(patch);
+      const out = isObject(base) ? deepClone(base) : {};
+      Object.keys(patch).forEach((key) => {
+        const patchValue = patch[key];
+        if (isObject(patchValue) && isObject(out[key])) {
+          out[key] = deepMerge(out[key], patchValue);
+        } else {
+          out[key] = deepClone(patchValue);
+        }
+      });
+      return out;
+    }
+
+    function pretty(value) {
+      if (typeof value === "string") return value;
+      return JSON.stringify(value, null, 2);
+    }
+
+    function actorClass(actor) {
+      if (actor === "User") return "user";
+      if (actor === "Buyer") return "buyer";
+      if (actor === "Seller") return "seller";
+      return "platform";
+    }
+
+    function findStepIndex(stepId) {
+      return steps.findIndex((s) => s.id === stepId);
+    }
+
+    function getStepOptions(step) {
+      if (optionCache[step.id]) return optionCache[step.id];
+      const err = errorMetaByStep[step.id] || {
+        status: 500,
+        code: "PLATFORM_UNKNOWN_ERROR",
+        message: "未知异常"
+      };
+      const options = [
+        {
+          id: "happy",
+          label: "标准成功样例",
+          description: "按冻结参数执行，便于对照文档规范。",
+          naturalInput: `${step.actor}按标准参数执行「${step.title}」。`,
+          naturalOutput: `系统返回成功结果，关键信号：${step.signal}。`
+        },
+        {
+          id: "edge",
+          label: "边界参数样例",
+          description: "使用可接受边界值，检查兼容性与鲁棒性。",
+          requestPatch: edgeRequestPatchByStep[step.id] || {},
+          responsePatch: edgeResponsePatchByStep[step.id] || {},
+          naturalInput: `${step.actor}使用边界参数执行「${step.title}」，用于观察系统在压力边界下的行为。`,
+          naturalOutput: "系统返回边界场景的示例结果，流程仍可继续。"
+        },
+        {
+          id: "error",
+          label: `异常样例（${err.code}）`,
+          description: "用于调试：返回标准错误结构和错误码。",
+          requestPatch: { debug_mode: true },
+          responseReplace: {
+            error: {
+              status: err.status,
+              code: err.code,
+              message: err.message,
+              step_id: step.id
+            },
+            trace_id: `trace_${step.id.toLowerCase()}_debug`
+          },
+          signal: `返回错误码 ${err.code}`,
+          flow: `<strong>调试提示：</strong>${err.message}。请基于错误码快速定位问题。`,
+          naturalInput: `${step.actor}提交一份不满足约束的请求，主动触发异常分支。`,
+          naturalOutput: `系统返回错误码 ${err.code}，可直接用于 debugger 场景定位。`
+        }
+      ];
+      optionCache[step.id] = options;
+      return options;
+    }
+
+    function getSelectedOption(step) {
+      const options = getStepOptions(step);
+      const selectedId = state.selectedOptionByStep[step.id] || options[0].id;
+      const found = options.find((item) => item.id === selectedId);
+      return found || options[0];
+    }
+
+    function composeStepForOption(step, option) {
+      const request = option.requestReplace
+        ? deepClone(option.requestReplace)
+        : deepMerge(step.request, option.requestPatch || {});
+      const response = option.responseReplace
+        ? deepClone(option.responseReplace)
+        : deepMerge(step.response, option.responsePatch || {});
+      return {
+        ...step,
+        summary: option.summary || step.summary,
+        signal: option.signal || step.signal,
+        flow: option.flow || step.flow,
+        request,
+        response,
+        naturalInput: option.naturalInput || `${step.actor}执行「${step.title}」。`,
+        naturalOutput: option.naturalOutput || `系统返回：${step.signal}。`
+      };
+    }
+
+    function formatAt(isoString) {
+      return new Date(isoString).toLocaleString("zh-CN", { hour12: false });
+    }
+
+    function buildExecStatusText(stepId) {
+      const rec = state.executedSteps[stepId];
+      if (!rec) return "尚未执行当前步骤";
+      return `已执行：${formatAt(rec.executedAt)} · 场景：${rec.optionLabel}`;
+    }
+
+    function moveStep(delta) {
+      const next = Math.max(0, Math.min(steps.length - 1, state.activeIndex + delta));
+      if (next === state.activeIndex) return;
+      state.activeIndex = next;
+      renderSteps();
+      renderDetail();
+    }
+
+    function setActiveStep(stepId) {
+      const idx = findStepIndex(stepId);
+      if (idx >= 0) {
+        state.activeIndex = idx;
+        renderSteps();
+        renderDetail();
+      }
+    }
+
+    function executeCurrentStep() {
+      const step = steps[state.activeIndex];
+      const option = getSelectedOption(step);
+      const effective = composeStepForOption(step, option);
+      const nowIso = new Date().toISOString();
+      state.executedSteps[step.id] = {
+        optionId: option.id,
+        optionLabel: option.label,
+        executedAt: nowIso
+      };
+      state.executionLog.push(
+        `[${formatAt(nowIso)}] ${step.id} ${step.title} | 场景：${option.label} | 结果：${effective.signal}`
+      );
+      if (state.executionLog.length > 200) state.executionLog.shift();
+      renderSteps();
+      renderDetail();
+      renderExecutionLog();
+    }
+
+    function clearExecutionLog() {
+      state.executedSteps = {};
+      state.executionLog = [];
+      renderSteps();
+      renderDetail();
+      renderExecutionLog();
+    }
+
+    function renderOptionSelect(selectEl, hintEl, step) {
+      if (!selectEl || !hintEl) return;
+      const options = getStepOptions(step);
+      const selected = getSelectedOption(step);
+      selectEl.innerHTML = options
+        .map((opt) => `<option value="${opt.id}">${opt.label}</option>`)
+        .join("");
+      selectEl.value = selected.id;
+      hintEl.textContent = selected.description;
+    }
+
+    function renderExecutionLog() {
+      if (!execLog) return;
+      if (state.executionLog.length === 0) {
+        execLog.textContent = "尚无执行记录。点击“执行当前步骤”开始记录。";
+        return;
+      }
+      execLog.textContent = state.executionLog.join("\n");
+    }
+
+    function renderSteps() {
+      stepList.innerHTML = "";
+      steps.forEach((s, i) => {
+        const executed = Boolean(state.executedSteps[s.id]);
+        const btn = document.createElement("button");
+        btn.className = "step-btn" + (i === state.activeIndex ? " active" : "") + (executed ? " executed" : "");
+        btn.style.animationDelay = `${i * 25}ms`;
+        const executedHint = executed ? "<div class=\"step-sub\" style=\"color:#3a5118;font-weight:700\">执行状态：已执行</div>" : "";
+        btn.innerHTML = `
+          <div class="step-top">
+            <span class="step-id">${s.id}</span>
+            <span class="phase">${s.phase}</span>
+          </div>
+          <div class="step-title">${s.title}</div>
+          <div class="step-sub">${s.summary}</div>
+          ${executedHint}
+          <span class="actor-chip ${actorClass(s.actor)}">${s.actor}</span>
+        `;
+        btn.onclick = () => {
+          state.activeIndex = i;
+          renderSteps();
+          renderDetail();
+        };
+        stepList.appendChild(btn);
+      });
+    }
+
+    function renderDetail() {
+      const baseStep = steps[state.activeIndex];
+      const selected = getSelectedOption(baseStep);
+      const step = composeStepForOption(baseStep, selected);
+      const executedCount = Object.keys(state.executedSteps).length;
+
+      stepCounter.textContent = `${state.activeIndex + 1} / ${steps.length} · 已执行 ${executedCount}`;
+      detailTitle.textContent = `${step.id} · ${step.title}`;
+      detailSummary.textContent = step.summary;
+      detailActor.innerHTML = `<span class="actor-chip ${actorClass(step.actor)}">${step.actor}</span>`;
+      detailPhase.textContent = step.phase;
+      detailEndpoint.textContent = step.endpoint;
+      detailSignal.textContent = step.signal;
+      requestCode.textContent = pretty(step.request);
+      responseCode.textContent = pretty(step.response);
+      detailFlow.innerHTML = step.flow;
+      execStatus.textContent = buildExecStatusText(baseStep.id);
+      renderOptionSelect(stepOptionSelect, stepOptionHint, baseStep);
+    }
+
+    async function copyText(type) {
+      const payload = type === "request" ? requestCode.textContent : responseCode.textContent;
+      try {
+        await navigator.clipboard.writeText(payload);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    document.querySelectorAll(".copy-btn").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        copyText(btn.dataset.copy);
+        const original = btn.textContent;
+        btn.textContent = "已复制";
+        setTimeout(() => {
+          btn.textContent = original;
+        }, 900);
+      });
+    });
+
+    document.getElementById("prevStepBtn").addEventListener("click", () => moveStep(-1));
+    document.getElementById("nextStepBtn").addEventListener("click", () => moveStep(1));
+    document.getElementById("execStepBtn").addEventListener("click", () => executeCurrentStep());
+    document.getElementById("clearLogBtn").addEventListener("click", () => clearExecutionLog());
+
+    stepOptionSelect.addEventListener("change", (event) => {
+      const step = steps[state.activeIndex];
+      state.selectedOptionByStep[step.id] = event.target.value;
+      renderDetail();
+    });
+
+    renderSteps();
+    renderDetail();
+    renderExecutionLog();
+  </script>
+</body>
+</html>

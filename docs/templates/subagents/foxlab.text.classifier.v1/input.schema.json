@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "foxlab.text.classifier.v1 Input Schema",
+  "description": "Input schema for FoxLab Text Classifier. Buyer must provide these fields in task.input.",
+  "type": "object",
+  "required": ["text"],
+  "properties": {
+    "text": {
+      "type": "string",
+      "description": "The text content to classify.",
+      "minLength": 1,
+      "maxLength": 10000
+    },
+    "language_hint": {
+      "type": "string",
+      "description": "Optional BCP-47 language tag (e.g. 'en', 'zh-CN'). If omitted, auto-detected.",
+      "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+    }
+  },
+  "additionalProperties": false
+}

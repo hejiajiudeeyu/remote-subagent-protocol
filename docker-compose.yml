@@ -1,0 +1,64 @@
+name: croc-tavern-mvp
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: croc
+      POSTGRES_USER: croc
+      POSTGRES_PASSWORD: croc
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U croc -d croc"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  platform-api:
+    build:
+      context: ./apps/platform-api
+    environment:
+      PORT: 8080
+      SERVICE_NAME: platform-api
+      DATABASE_URL: postgresql://croc:croc@postgres:5432/croc
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  buyer-controller:
+    build:
+      context: ./apps/buyer-controller
+    environment:
+      PORT: 8081
+      SERVICE_NAME: buyer-controller
+      PLATFORM_API_BASE_URL: http://platform-api:8080
+      TIMEOUT_CONFIRMATION_MODE: ask_by_default
+      HARD_TIMEOUT_AUTO_FINALIZE: "true"
+      BUYER_CONTROLLER_POLL_INTERVAL_ACTIVE_S: "5"
+      BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S: "15"
+    ports:
+      - "8081:8081"
+    depends_on:
+      platform-api:
+        condition: service_started
+
+  seller-controller:
+    build:
+      context: ./apps/seller-controller
+    environment:
+      PORT: 8082
+      SERVICE_NAME: seller-controller
+      PLATFORM_API_BASE_URL: http://platform-api:8080
+    ports:
+      - "8082:8082"
+    depends_on:
+      platform-api:
+        condition: service_started
+
+volumes:
+  postgres-data:

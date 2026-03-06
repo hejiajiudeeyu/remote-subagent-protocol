@@ -1,0 +1,32 @@
+{
+  "request_id": "018f9d72-4cc1-7a20-b5e2-9e7d3a4f1c82",
+  "result_version": "0.1.0",
+  "seller_id": "seller_owlworks",
+  "subagent_id": "owlworks.data.extractor.v1",
+  "status": "ok",
+  "output": {
+    "records": [
+      { "name": "Widget A", "price": "$12.99", "rating": "4.5", "url": "https://example.com/products/widget-a" },
+      { "name": "Widget B", "price": "$9.49", "rating": "4.2", "url": "https://example.com/products/widget-b" },
+      { "name": "Gadget Pro", "price": "$24.00", "rating": "4.8", "url": "https://example.com/products/gadget-pro" }
+    ],
+    "metadata": {
+      "source_url": "https://example.com/products",
+      "pages_crawled": 3,
+      "total_records": 3,
+      "extracted_at": "2026-03-02T14:01:42Z"
+    }
+  },
+  "timing": {
+    "accepted_at": "2026-03-02T14:00:12Z",
+    "finished_at": "2026-03-02T14:01:42Z",
+    "elapsed_ms": 90200
+  },
+  "usage": {
+    "cost_estimate": 0.08,
+    "resource_units": 3
+  },
+  "signature_algorithm": "Ed25519",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nREPLACE_OWLWORKS\n-----END PUBLIC KEY-----",
+  "signature_base64": "seller_sig_v1_base64_placeholder"
+}

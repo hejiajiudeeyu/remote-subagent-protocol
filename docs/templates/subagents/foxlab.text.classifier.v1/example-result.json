@@ -1,0 +1,27 @@
+{
+  "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+  "result_version": "0.1.0",
+  "seller_id": "seller_foxlab",
+  "subagent_id": "foxlab.text.classifier.v1",
+  "status": "ok",
+  "output": {
+    "label": "refund_request",
+    "confidence": 0.94,
+    "secondary_labels": [
+      { "label": "shipping_inquiry", "confidence": 0.04 },
+      { "label": "general_feedback", "confidence": 0.02 }
+    ]
+  },
+  "timing": {
+    "accepted_at": "2026-03-02T11:20:18Z",
+    "finished_at": "2026-03-02T11:20:21Z",
+    "elapsed_ms": 3100
+  },
+  "usage": {
+    "cost_estimate": 0.02,
+    "resource_units": 1
+  },
+  "signature_algorithm": "Ed25519",
+  "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nREPLACE_FOXLAB\n-----END PUBLIC KEY-----",
+  "signature_base64": "seller_sig_v1_base64_placeholder"
+}

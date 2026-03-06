@@ -1,0 +1,54 @@
+{
+  "request_id": "018f9d72-4cc1-7a20-b5e2-9e7d3a4f1c82",
+  "contract_version": "0.1.0",
+  "created_at": "2026-03-02T14:00:00Z",
+  "buyer": {
+    "buyer_id": "buyer_dataops",
+    "reply_to": "buyer+extract@croc.tavern"
+  },
+  "seller": {
+    "seller_id": "seller_owlworks",
+    "subagent_id": "owlworks.data.extractor.v1"
+  },
+  "task": {
+    "task_type": "data_extraction",
+    "input": {
+      "source_url": "https://example.com/products",
+      "fields": ["name", "price", "rating", "url"],
+      "output_format": "json",
+      "max_pages": 3
+    },
+    "output_schema": {
+      "type": "object",
+      "required": ["records", "metadata"],
+      "properties": {
+        "records": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "required": ["source_url", "pages_crawled", "total_records"],
+          "properties": {
+            "source_url": { "type": "string" },
+            "pages_crawled": { "type": "integer" },
+            "total_records": { "type": "integer" }
+          }
+        }
+      }
+    }
+  },
+  "constraints": {
+    "budget_cap": 0.20,
+    "soft_timeout_s": 120,
+    "hard_timeout_s": 600
+  },
+  "token": "<TASK_TOKEN>",
+  "trace": {
+    "thread_hint": "croc-req-018f9d72",
+    "source_run_id": "run_buyer_20260302_042"
+  }
+}

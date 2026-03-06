@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability report (Private)
+    url: https://github.com/hejiajiudeeyu/CrocTavern-Subagent_Hiring_Market/security/advisories/new
+    about: Report vulnerabilities privately via GitHub Private Vulnerability Reporting.
+  - name: Community chat (Discord)
+    url: https://discord.gg/e4nDukFAc6
+    about: Use Discord for non-sensitive community discussion.

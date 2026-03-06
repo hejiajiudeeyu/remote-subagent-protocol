@@ -1,0 +1,137 @@
+# Defaults v0.1（建议冻结参数）
+
+用途：在编码前一次性冻结关键参数，避免买家端、卖家端、服务端实现分叉。
+
+状态说明：
+- `FROZEN`：已确认并冻结（v0.1）
+
+更新时间：2026-03-05
+
+补充约束（模式演进）：
+- `L0-L3` 应被视为同一系统的可选运行模式，而不是四套不同协议实现。
+- 模式切换只允许改变 controller 间通信拓扑、relay / mailbox / network 边界与 transport adapter 装配方式。
+- 模式切换不得改变核心协议语义、请求/结果结构、状态机迁移规则、ACK 语义与幂等规则。
+
+## 1) 请求与超时
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `ack_deadline_s` | `120` | FROZEN | 买家发单后等待 ACK 的最大时长（含邮件投递延迟） |
+| `soft_timeout_s` | `90` | FROZEN | 软超时，触发告警或降级 |
+| `hard_timeout_s` | `300` | FROZEN | 硬超时，买家终止等待并记超时 |
+| `timeout_confirmation_mode` | `ask_by_default` | FROZEN | 达到 `soft_timeout_s` 时默认先询问 Buyer Agent 是否继续等待 |
+| `hard_timeout_auto_finalize` | `true` | FROZEN | 达到 `hard_timeout_s` 且未明确继续等待时自动终态 `TIMED_OUT` |
+| `buyer_controller_poll_interval_active_s` | `5` | FROZEN | Buyer Agent 轮询 Controller 的活跃期间隔（前 30 秒） |
+| `buyer_controller_poll_interval_backoff_s` | `15` | FROZEN | Buyer Agent 轮询 Controller 的退避间隔（30 秒后） |
+| `max_retry_attempts` | `2` | FROZEN | 最大重试次数（总尝试数=3） |
+| `retry_backoff` | `exponential + jitter` | FROZEN | 重试退避策略 |
+| `email_delivery_budget_s` | `60` | FROZEN | 邮件投递预算，用于超时分层计算 |
+
+## 2) Token 与安全
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `token_ttl_seconds` | `900` | FROZEN | 任务 token 有效期（15 分钟，覆盖邮件投递延迟） |
+| `token_min_ttl_seconds` | `600` | FROZEN | 最短建议有效期 |
+| `token_max_ttl_seconds` | `1200` | FROZEN | 最长建议有效期 |
+| `result_signature_algorithm` | `Ed25519` | FROZEN | 结果包签名算法 |
+| `seller_token_validation_mode` | `online_introspect_required` | FROZEN | 卖家校验 token 统一走 `POST /v1/tokens/introspect` |
+| `idempotency_window_hours` | `24` | FROZEN | `request_id` 去重窗口 |
+| `introspect_sla_p99_ms` | `200` | FROZEN | introspect 接口 P99 延迟目标 |
+| `introspect_cache_ttl_s` | `30` | FROZEN | introspect 结果缓存 TTL |
+
+## 3) 心跳与可用性
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `heartbeat_interval_s` | `30` | FROZEN | 卖家心跳上报间隔 |
+| `degraded_threshold_s` | `90` | FROZEN | 超过该值进入 `degraded` |
+| `offline_threshold_s` | `180` | FROZEN | 超过该值进入 `offline` |
+| `catalog_health_cache_ttl_s` | `60` | FROZEN | 买家读取健康状态缓存 TTL |
+
+## 4) 目录与路由
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `catalog_cache_ttl_s` | `300` | FROZEN | 买家目录缓存 TTL |
+| `catalog_default_status_filter` | `active` | FROZEN | 默认过滤激活条目 |
+| `catalog_default_availability_filter` | `healthy` | FROZEN | 默认只选健康卖家 |
+| `routing_fallback_policy` | `retry_once_then_switch_seller` | FROZEN | ACK 超时后路由策略 |
+| `catalog_import_mode` | `on_demand_immediate` | FROZEN | 目录按需即时导入 |
+| `seller_subagent_binding_mode` | `platform_import_association` | FROZEN | subagent 与 seller 关系由平台导入时建立 |
+| `template_delivery_mode` | `platform_api_bundle` | FROZEN | Buyer 通过平台 API 拉取模板包，不直接读取仓库目录 |
+| `catalog_expose_delivery_address` | `false` | FROZEN | 目录批量查询不返回投递地址 |
+| `delivery_meta_mode` | `request_scoped` | FROZEN | 通过 `POST /v1/requests/{request_id}/delivery-meta` 单次下发 |
+| `delivery_meta_ttl_seconds` | `900` | FROZEN | 投递元数据有效期（与 token TTL 对齐） |
+
+## 5) 指标与展示
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `metrics_windows` | `24h,7d` | FROZEN | 默认指标窗口 |
+| `ranking_min_samples` | `30` | FROZEN | 排序最小样本量门槛 |
+| `mvp_display_metrics` | `call_volume,success_rate,timeout_rate,schema_compliance_rate,p95_exec_ms` | FROZEN | MVP 对外展示硬指标 |
+| `buyer_event_required` | `request_sent,request_acked,request_succeeded,request_timeout,result_schema_invalid,result_signature_invalid` | FROZEN | 买家最小事件集 |
+| `seller_event_required` | `request_received,request_accepted,request_succeeded,request_timeout` | FROZEN | 卖家最小事件集 |
+
+## 6) 定价与结算
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `pricing_mode` | `reference_only` | FROZEN | pricing 字段仅作参考提示，不触发计费 |
+| `settlement_enabled` | `false` | FROZEN | MVP 不启用结算 |
+
+## 7) 版本与兼容
+
+| 参数 | 建议值 | 状态 | 说明 |
+|---|---:|---|---|
+| `contract_version` | `0.1.0` | FROZEN | 合约版本 |
+| `result_version` | `0.1.0` | FROZEN | 结果包版本 |
+| `api_version_prefix` | `/v1` | FROZEN | 控制面 API 路径版本 |
+| `compat_policy` | `additive-only` | FROZEN | 仅追加字段，不破坏旧语义 |
+| `request_event_scope_v0_1` | `ACKED_only` | FROZEN | v0.1 仅实现 ACK 事件，不实现进度事件 |
+| `platform_storage_backend` | `PostgreSQL` | FROZEN | 服务端主存储选型 |
+| `api_auth_mode` | `api_key` | FROZEN | 控制面 API 鉴权方式 |
+| `identity_onboarding_mode` | `register_buyer_default_then_activate_seller_on_agent_approval` | FROZEN | 用户注册后默认 buyer；seller 角色在 agent 审核通过后激活 |
+| `seller_identity_cardinality` | `one_seller_per_user` | FROZEN | v0.1 一个 user 仅绑定一个 seller_id |
+| `catalog_submission_mode` | `form_submit_then_cli_review_import` | FROZEN | 表单收集后由 CLI 审核导入 |
+
+## 8) 核心参数确认结果
+
+以下 8 项已确认并冻结（可直接进入实现）：
+1. `ack_deadline_s=120`
+2. `token_ttl_seconds=900`
+3. `soft_timeout_s=90`, `hard_timeout_s=300`
+4. `max_retry_attempts=2`, `retry_backoff=exponential+jitter`
+5. `result_signature_algorithm=Ed25519`
+6. `heartbeat_interval_s=30`, `degraded_threshold_s=90`, `offline_threshold_s=180`
+7. `catalog_default_availability_filter=healthy`
+8. `ranking_min_samples=30`
+
+补充实现决议：
+- `seller_token_validation_mode=online_introspect_required`
+- `request_event_scope_v0_1=ACKED_only`
+- `catalog_import_mode=on_demand_immediate`
+- `platform_storage_backend=PostgreSQL`
+- `seller_subagent_binding_mode=platform_import_association`
+- `catalog_expose_delivery_address=false`
+- `delivery_meta_mode=request_scoped`
+- `delivery_meta_ttl_seconds=900`
+- `api_auth_mode=api_key`
+- `identity_onboarding_mode=register_buyer_default_then_activate_seller_on_agent_approval`
+- `seller_identity_cardinality=one_seller_per_user`
+- `catalog_submission_mode=form_submit_then_cli_review_import`
+
+## 9) 本地配置覆盖（无 `.env.example`）
+
+当前仓库不新增 `.env.example`，本地通过运行环境变量覆盖默认值。
+
+建议覆盖项（示例）：
+- `TIMEOUT_CONFIRMATION_MODE=ask_by_default|always_continue|always_finalize`
+- `HARD_TIMEOUT_AUTO_FINALIZE=true|false`
+- `BUYER_CONTROLLER_POLL_INTERVAL_ACTIVE_S=5`
+- `BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S=15`
+
+说明：
+- 未设置时，行为以本文件冻结默认值为准。
+- 若实现侧采用配置文件（如 YAML/TOML），需保持与上述变量语义一致。

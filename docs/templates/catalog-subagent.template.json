@@ -1,0 +1,41 @@
+{
+  "subagent_id": "seller_namespace.capability.variant.v1",
+  "seller_id": "seller_example",
+  "display_name": "Example Subagent",
+  "description": "Short description of what this subagent does.",
+  "capabilities": [
+    "classification"
+  ],
+  "supported_task_types": [
+    "text_classification"
+  ],
+  "version": "1.0.0",
+  "status": "active",
+  "delivery_address": "tasks@example.com",
+  "contact": {
+    "email": "ops@example.com"
+  },
+  "endpoint_hint": "email://seller@example.com",
+  "constraints": {
+    "max_budget_cap": 0.1,
+    "max_hard_timeout_s": 300
+  },
+  "sla_hint": {
+    "p95_exec_ms": 5000,
+    "timeout_rate_7d": 0.05
+  },
+  "pricing_hint": {
+    "currency": "USD",
+    "per_request": 0.02
+  },
+  "eta_hint": {
+    "queue_p50_s": 8,
+    "exec_p50_s": 35,
+    "exec_p95_s": 120,
+    "sample_size_7d": 340,
+    "updated_at": "2026-03-02T12:00:00Z"
+  },
+  "seller_public_key_pem": "-----BEGIN PUBLIC KEY-----\\nREPLACE_ME\\n-----END PUBLIC KEY-----",
+  "template_ref": "docs/templates/subagents/{subagent_id}/",
+  "updated_at": "2026-03-02T12:00:00Z"
+}

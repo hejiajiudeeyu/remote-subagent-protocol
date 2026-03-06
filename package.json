@@ -1,0 +1,37 @@
+{
+  "name": "remote-subagent-protocol",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Protocol monorepo for remote subagent contracts, control plane, and reference implementations",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "packages/transports/*"
+  ],
+  "scripts": {
+    "dev:platform": "npm --workspace @croc/platform-api run dev",
+    "dev:buyer": "npm --workspace @croc/buyer-controller run dev",
+    "dev:seller": "npm --workspace @croc/seller-controller run dev",
+    "dev": "echo \"Run one app via dev:platform/dev:buyer/dev:seller\"",
+    "start": "echo \"Use app-level start scripts or docker compose\"",
+    "test": "npm run test:unit && npm run test:integration && npm run test:e2e",
+    "test:all": "npm run test && npm run test:compose-smoke",
+    "test:unit": "vitest run --config tests/config/vitest.unit.config.mjs",
+    "test:integration": "vitest run --config tests/config/vitest.integration.config.mjs",
+    "test:e2e": "node tests/reporters/reset-flow-report.mjs && vitest run --config tests/config/vitest.e2e.config.mjs && node tests/reporters/flow-issue-reporter.mjs",
+    "test:e2e:ui": "vitest --config tests/config/vitest.e2e.config.mjs --ui",
+    "test:compose-smoke": "node tests/smoke/compose-smoke.mjs",
+    "test:compose-smoke:strict": "STRICT_COMPOSE_SMOKE=true node tests/smoke/compose-smoke.mjs",
+    "test:flow:dashboard": "python3 -m http.server 4173",
+    "test:flow:summary": "node tests/reporters/flow-issue-reporter.mjs",
+    "test:ci": "npm run test && npm run test:compose-smoke:strict"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "@vitest/ui": "^3.2.4",
+    "ajv": "^8.17.1",
+    "vitest": "^3.2.4"
+  }
+}
