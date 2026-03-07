@@ -78,6 +78,17 @@ function createSellerStateFromEnv() {
   });
 }
 
+function resolveBootstrapSeller(platformState, requestedSellerId) {
+  const bootstrapSellers = platformState?.bootstrap?.sellers || [];
+  if (!Array.isArray(bootstrapSellers) || bootstrapSellers.length === 0) {
+    return null;
+  }
+  if (!requestedSellerId) {
+    return bootstrapSellers[0];
+  }
+  return bootstrapSellers.find((item) => item.seller_id === requestedSellerId) || bootstrapSellers[0];
+}
+
 async function main() {
   const platformPersistence = await createOptionalPersistence("platform-api");
   const buyerPersistence = await createOptionalPersistence("buyer-controller");
@@ -88,12 +99,27 @@ async function main() {
     hydratePlatformState(platformState, await platformPersistence.loadSnapshot());
   }
 
+  const requestedSellerId = process.env.SELLER_ID || process.env.BOOTSTRAP_SELLER_ID || "seller_foxlab";
+  const bootstrapSeller = resolveBootstrapSeller(platformState, requestedSellerId);
+
   const buyerState = createBuyerState();
   if (buyerPersistence) {
     hydrateBuyerState(buyerState, await buyerPersistence.loadSnapshot());
   }
 
-  const sellerState = createSellerStateFromEnv();
+  const sellerState =
+    process.env.SELLER_SIGNING_PUBLIC_KEY_PEM || process.env.SELLER_SIGNING_PRIVATE_KEY_PEM
+      ? createSellerStateFromEnv()
+      : createSellerState({
+          sellerId: bootstrapSeller?.seller_id || requestedSellerId,
+          subagentIds: [bootstrapSeller?.subagent_id || process.env.BOOTSTRAP_SUBAGENT_ID || "foxlab.text.classifier.v1"],
+          signing: bootstrapSeller?.signing
+            ? {
+                publicKeyPem: bootstrapSeller.signing.publicKeyPem,
+                privateKeyPem: bootstrapSeller.signing.privateKeyPem
+              }
+            : undefined
+        });
   if (sellerPersistence) {
     hydrateSellerState(sellerState, await sellerPersistence.loadSnapshot());
   }
@@ -106,7 +132,7 @@ async function main() {
   });
 
   const platformBaseUrl = process.env.PLATFORM_API_BASE_URL || "http://127.0.0.1:8080";
-  const sellerApiKey = process.env.PLATFORM_API_KEY || process.env.BOOTSTRAP_SELLER_API_KEY || null;
+  const sellerApiKey = process.env.PLATFORM_API_KEY || process.env.BOOTSTRAP_SELLER_API_KEY || bootstrapSeller?.api_key || null;
   const sellerGuardrails = {
     maxHardTimeoutS: Number(process.env.SELLER_MAX_HARD_TIMEOUT_S || 300),
     allowedTaskTypes: (process.env.SELLER_ALLOWED_TASK_TYPES || "")

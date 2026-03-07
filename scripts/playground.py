@@ -20,14 +20,6 @@ RUN_DIR = ROOT_DIR / ".run" / "playground"
 LOG_DIR = RUN_DIR / "logs"
 PID_DIR = RUN_DIR / "pids"
 
-DEFAULT_PUBLIC_KEY = """-----BEGIN PUBLIC KEY-----
-MCowBQYDK2VwAyEAWxEgqqgXZkYM47rWV8OKi5EklRlUk/o9zXI5SS2QQmY=
------END PUBLIC KEY-----"""
-
-DEFAULT_PRIVATE_KEY = """***REMOVED***
-***REMOVED***
-***REMOVED_PRIVATE_KEY***"""
-
 
 def load_dotenv_file(path: Path) -> None:
     if not path.exists():
@@ -59,14 +51,14 @@ def configure_env() -> dict[str, str]:
     env.setdefault("BOOTSTRAP_SELLER_ID", "seller_foxlab")
     env.setdefault("BOOTSTRAP_SUBAGENT_ID", "foxlab.text.classifier.v1")
     env.setdefault("BOOTSTRAP_DELIVERY_ADDRESS", "local://relay/seller_foxlab/foxlab.text.classifier.v1")
-    env.setdefault("BOOTSTRAP_SELLER_API_KEY", "***REMOVED_STATIC_API_KEY***")
-    env.setdefault("BOOTSTRAP_SELLER_PUBLIC_KEY_PEM", DEFAULT_PUBLIC_KEY)
-    env.setdefault("BOOTSTRAP_SELLER_PRIVATE_KEY_PEM", DEFAULT_PRIVATE_KEY)
     env.setdefault("SELLER_ID", env["BOOTSTRAP_SELLER_ID"])
     env.setdefault("SUBAGENT_IDS", env["BOOTSTRAP_SUBAGENT_ID"])
-    env.setdefault("SELLER_SIGNING_PUBLIC_KEY_PEM", env["BOOTSTRAP_SELLER_PUBLIC_KEY_PEM"])
-    env.setdefault("SELLER_SIGNING_PRIVATE_KEY_PEM", env["BOOTSTRAP_SELLER_PRIVATE_KEY_PEM"])
-    env.setdefault("PLATFORM_API_KEY", env["BOOTSTRAP_SELLER_API_KEY"])
+    if env.get("BOOTSTRAP_SELLER_PUBLIC_KEY_PEM"):
+        env.setdefault("SELLER_SIGNING_PUBLIC_KEY_PEM", env["BOOTSTRAP_SELLER_PUBLIC_KEY_PEM"])
+    if env.get("BOOTSTRAP_SELLER_PRIVATE_KEY_PEM"):
+        env.setdefault("SELLER_SIGNING_PRIVATE_KEY_PEM", env["BOOTSTRAP_SELLER_PRIVATE_KEY_PEM"])
+    if env.get("BOOTSTRAP_SELLER_API_KEY"):
+        env.setdefault("PLATFORM_API_KEY", env["BOOTSTRAP_SELLER_API_KEY"])
     env.setdefault("SELLER_MAX_HARD_TIMEOUT_S", "300")
     env.setdefault("SELLER_HEARTBEAT_INTERVAL_MS", "30000")
 
@@ -204,16 +196,16 @@ def service_specs(env: dict[str, str]) -> list[dict[str, object]]:
                 "BOOTSTRAP_SELLER_ID": env["BOOTSTRAP_SELLER_ID"],
                 "BOOTSTRAP_SUBAGENT_ID": env["BOOTSTRAP_SUBAGENT_ID"],
                 "BOOTSTRAP_DELIVERY_ADDRESS": env["BOOTSTRAP_DELIVERY_ADDRESS"],
-                "BOOTSTRAP_SELLER_API_KEY": env["BOOTSTRAP_SELLER_API_KEY"],
-                "BOOTSTRAP_SELLER_PUBLIC_KEY_PEM": env["BOOTSTRAP_SELLER_PUBLIC_KEY_PEM"],
-                "BOOTSTRAP_SELLER_PRIVATE_KEY_PEM": env["BOOTSTRAP_SELLER_PRIVATE_KEY_PEM"],
+                "BOOTSTRAP_SELLER_API_KEY": env.get("BOOTSTRAP_SELLER_API_KEY", ""),
+                "BOOTSTRAP_SELLER_PUBLIC_KEY_PEM": env.get("BOOTSTRAP_SELLER_PUBLIC_KEY_PEM", ""),
+                "BOOTSTRAP_SELLER_PRIVATE_KEY_PEM": env.get("BOOTSTRAP_SELLER_PRIVATE_KEY_PEM", ""),
                 "SELLER_ID": env["SELLER_ID"],
                 "SUBAGENT_IDS": env["SUBAGENT_IDS"],
-                "SELLER_SIGNING_PUBLIC_KEY_PEM": env["SELLER_SIGNING_PUBLIC_KEY_PEM"],
-                "SELLER_SIGNING_PRIVATE_KEY_PEM": env["SELLER_SIGNING_PRIVATE_KEY_PEM"],
+                "SELLER_SIGNING_PUBLIC_KEY_PEM": env.get("SELLER_SIGNING_PUBLIC_KEY_PEM", ""),
+                "SELLER_SIGNING_PRIVATE_KEY_PEM": env.get("SELLER_SIGNING_PRIVATE_KEY_PEM", ""),
                 "SELLER_MAX_HARD_TIMEOUT_S": env["SELLER_MAX_HARD_TIMEOUT_S"],
                 "SELLER_HEARTBEAT_INTERVAL_MS": env["SELLER_HEARTBEAT_INTERVAL_MS"],
-                "PLATFORM_API_KEY": env["PLATFORM_API_KEY"],
+                "PLATFORM_API_KEY": env.get("PLATFORM_API_KEY", ""),
             },
         },
         {
