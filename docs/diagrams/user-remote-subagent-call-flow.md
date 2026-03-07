@@ -1,39 +1,38 @@
-# User -> Remote Subagent Call Flow (with Search)
+# User -> Remote Subagent Call Flow (L0 Baseline + Future Notes)
 
 ## 关键澄清（与规范文档对齐）
 
 ### B 阶段：目录返回什么，Buyer 才能充分筛选
 
-- 规范锚点：`docs/platform-api-v0.1.md` §3.1.1（Buyer 筛选最小字段集）。
-- `GET /v1/catalog/subagents`（或未来 `GET /v1/catalog/search`）需覆盖：
+- 规范锚点：`../l0/platform-api-v0.1.md` §3.1.1（Buyer 筛选最小字段集）。
+- `GET /v1/catalog/subagents` 在 L0 至少需覆盖：
   - 身份：`subagent_id`、`seller_id`
+  - 展示：`display_name`
   - 可用性：`status`、`availability_status`、`last_heartbeat_at`
-  - 能力：`capabilities[]`、`supported_task_types[]`、`version`
-  - 质量与时效：`sla_hint.p95_exec_ms`、`sla_hint.timeout_rate_7d`、`eta_hint.exec_p95_s`
-  - 成本：`pricing_hint.currency`、`pricing_hint.per_request`
-  - 安全验收：`seller_public_key_pem`（或轮换窗口的 `seller_public_keys_pem[]`）
+  - 安全验收：`seller_public_key_pem`
   - 合约构建入口：`template_ref`
-  - 搜索增强（仅 search 模式）：`score`、`match_reasons`、`score_breakdown`
+  - 增强项：`capabilities[]`、`supported_task_types[]`、`version`、`sla_hint.*`、`eta_hint.*`
+  - 搜索增强（仅 future search 模式）：`score`、`match_reasons`、`score_breakdown`
 - `delivery_address` 等通信元数据不在目录批量接口返回；在 D 阶段按单次请求下发。
 
 ### C 阶段：Template 从哪来
 
-- 规范锚点：`docs/platform-api-v0.1.md` §3.3。
+- 规范锚点：`../l0/platform-api-v0.1.md` §3.3。
 - Buyer 读取目录项中的 `template_ref`，再调用：
   - `GET /v1/catalog/subagents/{subagent_id}/template-bundle?template_ref=...`
-- 返回字段：`input_schema`、`output_schema`、`example_contract`、`example_result`、`readme_markdown`。
+- 返回字段：L0 必需 `input_schema`、`output_schema`；`example_contract`、`example_result`、`readme_markdown` 属于可选增强。
 - `template_ref` 是语义绑定键（可为路径样式或版本化标识）；Buyer 不直接读取仓库路径。
 
 ### D 阶段：Delivery Meta 从哪来
 
-- 规范锚点：`docs/platform-api-v0.1.md` §6.1。
+- 规范锚点：`../l0/platform-api-v0.1.md` §6.1。
 - Buyer 在 `POST /v1/tokens/task` 成功后调用：
   - `POST /v1/requests/{request_id}/delivery-meta`
-- 平台按 `request_id + seller_id + subagent_id (+ buyer_id)` 单次下发 `delivery_address/thread_policy`。
+- 平台按 `request_id + seller_id + subagent_id (+ buyer_id)` 单次下发 `delivery_address/thread_hint`。
 
 ### Buyer Agent 轮询接口（内部）
 
-- 规范锚点：`docs/architecture-mvp.md` §6.7。
+- 规范锚点：`../l0/architecture.md` §6.7。
 - Buyer Agent 通过内部接口轮询 Buyer Controller：
   - `GET /controller/requests/{request_id}`
 - Buyer Agent 在超时询问时通过内部接口写入决策：
@@ -130,7 +129,7 @@ sequenceDiagram
                 BA-->>BA: [B2-F4] 不进入后续阶段
             end
         else Catalog成功
-            P-->>BC: [B2-RES] 候选列表 + capabilities/supported_task_types/sla/pricing/template_ref/seller_public_key_pem
+            P-->>BC: [B2-RES] 候选列表 + capabilities/supported_task_types/eta_hint/template_ref/seller_public_key_pem
         end
     end
 
@@ -146,8 +145,8 @@ sequenceDiagram
             BA-->>BA: [C3-F4] 不进入授权与发送阶段
         end
     else 模板拉取成功
-        P-->>BC: [C3-RES] 返回 input_schema/output_schema/example_contract/example_result/readme_markdown
-        BC-->>BA: [C4-RES] 返回模板包（schema+examples+readme）
+        P-->>BC: [C3-RES] 返回模板包（L0: input_schema/output_schema；增强项可附 examples/readme）
+        BC-->>BA: [C4-RES] 返回模板包
         BA->>BC: [C5-REQ] 下发合约草案（task input/constraints/output schema）
     end
 
@@ -174,10 +173,10 @@ sequenceDiagram
             BA-->>BA: [D2-F4] 不进入后续阶段
         end
     else delivery-meta成功
-        P-->>BC: [D2-RES] 返回通信元数据（delivery_address/thread policy）
+        P-->>BC: [D2-RES] 返回通信元数据（delivery_address/thread_hint）
     end
 
-    BC->>BTA: [E1-REQ] 发送任务请求 [CROC][TASK][request_id]
+    BC->>BTA: [E1-REQ] 发送任务请求（request_id/thread_hint 语义）
     alt 发信失败且重试耗尽
         BTA-->>BC: [E1-F1] 错误: DELIVERY_FAILED / DELIVERY_RATE_LIMITED
         BC->>P: [E1-F2] POST /v1/metrics/events (request_send_failed)
@@ -289,9 +288,9 @@ sequenceDiagram
             alt 最终判定 SUCCEEDED
                 BC->>P: [H2-S1] POST /v1/metrics/events (request_succeeded)
                 BA-->>BU: [H2-END_SUCCESS] 返回 SUCCEEDED + output
-            else 最终判定 FAILED / DISPUTED
+            else 最终判定 FAILED
                 BC->>P: [H2-F1] POST /v1/metrics/events (semantic_rejected)
-                BA-->>BU: [H2-END_FAIL] 返回 FAILED 或 DISPUTED
+                BA-->>BU: [H2-END_FAIL] 返回 FAILED
             end
         end
     else 未收到任何回包
@@ -318,17 +317,17 @@ sequenceDiagram
 
 ## Buyer / Seller / Platform 状态（简版）
 
-- Buyer 请求状态：`CREATED -> DISCOVERING -> CONTRACT_PREPARED -> AUTHORIZED -> SENT -> ACKED -> (SUCCEEDED | FAILED | UNVERIFIED | TIMED_OUT | DISPUTED)`
+- Buyer 请求状态（L0）：`CREATED -> DISCOVERING -> CONTRACT_PREPARED -> AUTHORIZED -> SENT -> ACKED -> (SUCCEEDED | FAILED | UNVERIFIED | TIMED_OUT)`
 - Seller 请求状态：`RECEIVED -> AUTH_CHECKING -> CONTRACT_CHECKING -> (REJECTED | QUEUED) -> RUNNING -> (RESULT_PACKED | ERROR_PACKED) -> REPLIED -> DONE`
 - Platform 请求状态：`REQUEST_REGISTERED -> TOKEN_ISSUED -> DELIVERY_META_ISSUED -> (ACK_RECORDED) -> CLOSED`（超时分支可记录 `TIMEOUT_RECORDED`）
 
 ## Seller 任务队列机制（建议）
 
 - 入队点：`F2-ACT` 校验通过且 `G2-RES=accept` 后进入 `QUEUED`，再执行 `G3-REQ ACK`（语义为“已接收并排队”）。
-- 调度键：`priority`（SLA/付费等级）+ `enqueue_at`（FIFO）+ `tenant_quota`（防单租户挤占）。
-- 幂等键：`request_id`；重复到达直接返回已有状态，避免重复执行与重复扣费。
+- 调度键：`priority`（实现自定义优先级）+ `enqueue_at`（FIFO）。
+- 幂等键：`request_id`；重复到达直接返回已有状态，避免重复执行。
 - Worker 租约：`lease_ttl` + 心跳；worker 异常时任务从 `RUNNING` 回退到 `QUEUED` 重试。
-- 队列拒绝：超出并发/预算时返回 `EXEC_QUEUE_FULL`（含 `retry_after_s`），Buyer 可换候选或延迟重试。
+- 队列拒绝：超出并发/资源阈值时返回 `EXEC_QUEUE_FULL`（含 `retry_after_s`），Buyer 可换候选或延迟重试。
 - 观测指标：`queue_depth`、`queue_wait_ms_p95`、`run_ms_p95`、`reject_rate`。
 
 ## 失败分支最小处置表
@@ -339,13 +338,13 @@ sequenceDiagram
   责任：对应侧 Controller + Transport Adapter。处置：同 `request_id` 幂等重发，最多 3 次退避。
 - `AUTH_*`（introspect/claims 不通过）  
   责任：Seller Controller。处置：拒单并返回标准错误包，不进入执行。
-- `CONTRACT_*`（合约字段/版本/预算/任务类型）  
+- `CONTRACT_*`（合约字段/版本/超时/任务类型）  
   责任：Seller Controller（入站校验）与 Buyer Agent（修正合约）。处置：拒单或改单重提。
 - `EXEC_*`（执行超时/内部异常）  
   责任：Seller Agent（执行）+ Seller Controller（回包）。处置：返回 `retryable`，买方按策略重试。
 - `RESULT_*`（签名/Schema 不通过）  
   责任：Buyer Controller（机械校验）。处置：标记 `UNVERIFIED` 或 `FAILED`，不计成功。
 - 语义验收失败（非协议错误）  
-  责任：Buyer Agent。处置：`FAILED` 或进入 `DISPUTED`（人工仲裁）。
+  责任：Buyer Agent。处置：`FAILED`；人工复核属于后续流程。
 - Buyer 本地超时（`hard_timeout`）  
   责任：Buyer Controller。处置：停止本地等待并标记 `TIMED_OUT`；不保证远端执行被 kill。

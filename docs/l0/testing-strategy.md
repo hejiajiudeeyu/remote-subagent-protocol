@@ -19,7 +19,7 @@
 测试场景由两部分共同定义：
 
 - 流程图（步骤覆盖与编号锚点）：`docs/diagrams/user-remote-subagent-call-flow.md`
-- 规范文档（断言口径）：`architecture-mvp.md`、`platform-api-v0.1.md`、`integration-playbook-mvp.md`
+- 规范文档（断言口径）：`architecture.md`、`platform-api-v0.1.md`、`integration-playbook.md`
 
 ## 4. Mock / Runtime 策略
 

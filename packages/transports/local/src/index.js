@@ -17,6 +17,30 @@ function getQueue(hub, receiver) {
   return hub.queues.get(receiver);
 }
 
+function resolveReceiver(target) {
+  if (!target || typeof target !== "string" || !target.startsWith("local://")) {
+    return target;
+  }
+
+  try {
+    const parsed = new URL(target);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (parsed.hostname === "relay" && segments[0]) {
+      return segments[0];
+    }
+    if (segments[0]) {
+      return segments[0];
+    }
+    if (parsed.hostname) {
+      return parsed.hostname;
+    }
+  } catch {
+    return target;
+  }
+
+  return target;
+}
+
 export function createLocalTransportAdapter({ hub, receiver }) {
   if (!hub) {
     throw new Error("local_transport_hub_required");
@@ -27,7 +51,7 @@ export function createLocalTransportAdapter({ hub, receiver }) {
 
   return {
     async send(envelope) {
-      const target = envelope.to || envelope.seller_id || receiver;
+      const target = resolveReceiver(envelope.to || envelope.seller_id || receiver);
       const queue = getQueue(hub, target);
       const message = {
         ...envelope,

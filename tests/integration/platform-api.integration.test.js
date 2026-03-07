@@ -110,6 +110,89 @@ describe("platform-api integration", () => {
     expect(degraded.body.items.some((item) => item.seller_id === target.seller_id)).toBe(true);
   });
 
+  it("enforces request ownership and keeps ACK idempotent", async () => {
+    const buyerOne = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "integration-owner-1@test.local" }
+    });
+    const buyerTwo = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "integration-owner-2@test.local" }
+    });
+    const requestId = "req_request_ownership_1";
+    const seller = state.bootstrap.sellers[0];
+
+    const token = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${buyerOne.body.api_key}` },
+      body: {
+        request_id: requestId,
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(token.status).toBe(201);
+
+    const deliveryMeta = await jsonRequest(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${buyerOne.body.api_key}` },
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: token.body.task_token
+      }
+    });
+    expect(deliveryMeta.status).toBe(200);
+
+    const foreignEvents = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      headers: { Authorization: `Bearer ${buyerTwo.body.api_key}` }
+    });
+    expect(foreignEvents.status).toBe(403);
+    expect(foreignEvents.body.error).toBe("AUTH_RESOURCE_FORBIDDEN");
+
+    const foreignDeliveryMeta = await jsonRequest(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${buyerTwo.body.api_key}` },
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(foreignDeliveryMeta.status).toBe(403);
+    expect(foreignDeliveryMeta.body.error).toBe("AUTH_RESOURCE_FORBIDDEN");
+
+    const sellerAuth = {
+      Authorization: `Bearer ${state.bootstrap.sellers.find((item) => item.seller_id === seller.seller_id).api_key}`
+    };
+    const firstAck = await jsonRequest(baseUrl, `/v1/requests/${requestId}/ack`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        eta_hint_s: 2
+      }
+    });
+    expect(firstAck.status).toBe(202);
+
+    const secondAck = await jsonRequest(baseUrl, `/v1/requests/${requestId}/ack`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        eta_hint_s: 3
+      }
+    });
+    expect(secondAck.status).toBe(202);
+
+    const events = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      headers: { Authorization: `Bearer ${buyerOne.body.api_key}` }
+    });
+    expect(events.status).toBe(200);
+    expect(events.body.events.filter((event) => event.event_type === "ACKED")).toHaveLength(1);
+  });
+
   it("returns inactive for expired token", async () => {
     const register = await jsonRequest(baseUrl, "/v1/users/register", {
       method: "POST",

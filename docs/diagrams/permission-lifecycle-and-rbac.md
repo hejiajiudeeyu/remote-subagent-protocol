@@ -17,12 +17,12 @@
 ```mermaid
 stateDiagram-v2
     [*] --> BUYER_ACTIVE
-    BUYER_ACTIVE --> SELLER_PENDING_REVIEW: 提交 seller agent 草案
+    BUYER_ACTIVE --> SELLER_PENDING_REVIEW: 提交 remote subagent 草案
     SELLER_PENDING_REVIEW --> BUYER_ACTIVE: 审核拒绝/撤回
     SELLER_PENDING_REVIEW --> SELLER_ACTIVE: 审核通过 + 导入成功 + 资源绑定写入
     SELLER_ACTIVE --> SELLER_SUSPENDED: 审计封禁/违规/手动暂停
     SELLER_SUSPENDED --> SELLER_ACTIVE: 申诉通过/手动恢复
-    SELLER_ACTIVE --> BUYER_ACTIVE: 下线全部 seller agent + 回收 seller scope
+    SELLER_ACTIVE --> BUYER_ACTIVE: 下线全部 remote subagent + 回收 seller scope
     SELLER_SUSPENDED --> BUYER_ACTIVE: 永久回收 seller scope
 ```
 
@@ -30,11 +30,11 @@ stateDiagram-v2
 
 - `USER_REGISTERED`（来源：Platform API）  
   变更：创建 `user_id`，初始化 `role_scopes={buyer}`。
-- `SELLER_AGENT_SUBMITTED`（来源：Seller User/Portal）  
+- `REMOTE_SUBAGENT_SUBMITTED`（来源：Seller User/Portal）  
   变更：进入 `SELLER_PENDING_REVIEW`（不授予 seller scope）。
-- `SELLER_AGENT_APPROVED` + `CATALOG_IMPORTED`（来源：Reviewer + Import Pipeline）  
+- `REMOTE_SUBAGENT_APPROVED` + `CATALOG_IMPORTED`（来源：Reviewer + Import Pipeline）  
   变更：写入 `resource_binding`，激活 `seller` scope，进入 `SELLER_ACTIVE`。
-- `SELLER_AGENT_REJECTED`（来源：Reviewer）  
+- `REMOTE_SUBAGENT_REJECTED`（来源：Reviewer）  
   变更：保持/回到 `BUYER_ACTIVE`。
 - `SELLER_ACCESS_SUSPENDED`（来源：Risk/Ops）  
   变更：`SELLER_ACTIVE -> SELLER_SUSPENDED`。
@@ -69,10 +69,10 @@ sequenceDiagram
     IAM-->>P: [A2-RES] buyer scope active
     P->>AUD: [A3-ACT] 记录权限初始化事件
 
-    U->>P: [B1-REQ] SELLER_AGENT_SUBMITTED (owner_user_id)
+    U->>P: [B1-REQ] REMOTE_SUBAGENT_SUBMITTED (owner_user_id)
     P->>AUD: [B2-ACT] 记录 pending_review
 
-    RV->>P: [C1-REQ] SELLER_AGENT_APPROVED
+    RV->>P: [C1-REQ] REMOTE_SUBAGENT_APPROVED
     P->>IMP: [C2-REQ] 触发导入
     alt 导入失败
         IMP-->>P: [C2-F1] IMPORT_FAILED

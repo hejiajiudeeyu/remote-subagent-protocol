@@ -13,7 +13,7 @@
 请不要在公开 Issue 直接披露安全漏洞细节。
 
 请优先使用 GitHub Private Vulnerability Reporting（PVR）私下报告：
-- Report a vulnerability: `https://github.com/hejiajiudeeyu/CrocTavern-Subagent_Hiring_Market/security/advisories/new`
+- Report a vulnerability: `https://github.com/hejiajiudeeyu/remote-subagent-protocol/security/advisories/new`
 
 
 ## 3. 上报内容建议

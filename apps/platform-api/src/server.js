@@ -3,6 +3,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { createPostgresSnapshotStore } from "../../../packages/postgres-store/src/index.js";
+import { createSqliteSnapshotStore } from "../../../packages/sqlite-store/src/index.js";
+
 const __filename = fileURLToPath(import.meta.url);
 
 const HEARTBEAT_INTERVAL_S = 30;
@@ -37,7 +40,12 @@ function parseJsonBody(req) {
 }
 
 function sendJson(res, statusCode, data) {
-  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  res.writeHead(statusCode, {
+    "content-type": "application/json; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+    "access-control-allow-headers": "Content-Type, Authorization, X-Platform-Api-Key"
+  });
   res.end(JSON.stringify(data));
 }
 
@@ -80,12 +88,37 @@ function parseToken(secret, token) {
   }
 }
 
-function createSellerIdentity({ sellerId, subagentId, templateRef, displayName, deliveryAddress }) {
-  const signing = crypto.generateKeyPairSync("ed25519");
-  const publicKeyPem = signing.publicKey.export({ type: "spki", format: "pem" }).toString();
-  const privateKeyPem = signing.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
-  const sellerApiKey = `sk_seller_${crypto.randomBytes(12).toString("hex")}`;
-  const sellerUserId = randomId("user");
+function decodePemEnv(value) {
+  if (!value) {
+    return null;
+  }
+  return value.replace(/\\n/g, "\n");
+}
+
+function createSellerIdentity({
+  sellerId,
+  subagentId,
+  templateRef,
+  displayName,
+  deliveryAddress,
+  apiKey = null,
+  ownerUserId = null,
+  signing = null
+}) {
+  const keyPair = signing
+    ? {
+        publicKeyPem: signing.publicKeyPem,
+        privateKeyPem: signing.privateKeyPem
+      }
+    : (() => {
+        const generated = crypto.generateKeyPairSync("ed25519");
+        return {
+          publicKeyPem: generated.publicKey.export({ type: "spki", format: "pem" }).toString(),
+          privateKeyPem: generated.privateKey.export({ type: "pkcs8", format: "pem" }).toString()
+        };
+      })();
+  const sellerApiKey = apiKey || `sk_seller_${crypto.randomBytes(12).toString("hex")}`;
+  const sellerUserId = ownerUserId || randomId("user");
   const lastHeartbeatAt = nowIso();
 
   return {
@@ -108,12 +141,12 @@ function createSellerIdentity({ sellerId, subagentId, templateRef, displayName, 
       availability_status: "healthy",
       last_heartbeat_at: lastHeartbeatAt,
       template_ref: templateRef,
-      seller_public_key_pem: publicKeyPem,
+      seller_public_key_pem: keyPair.publicKeyPem,
       delivery_address: deliveryAddress
     },
     signing: {
-      publicKeyPem,
-      privateKeyPem
+      publicKeyPem: keyPair.publicKeyPem,
+      privateKeyPem: keyPair.privateKeyPem
     }
   };
 }
@@ -162,24 +195,41 @@ function resolveCatalogAvailability(item) {
   return buildAvailability(item.last_heartbeat_at);
 }
 
+async function persistPlatformState(onStateChanged, state) {
+  if (typeof onStateChanged === "function") {
+    await onStateChanged(state);
+  }
+}
+
 export function createPlatformState(options = {}) {
   const tokenSecret = options.tokenSecret || crypto.randomBytes(32);
   const tokenTtlSeconds = Number(options.tokenTtlSeconds || process.env.TOKEN_TTL_SECONDS || 300);
+  const bootstrapSellerSigning =
+    process.env.BOOTSTRAP_SELLER_PUBLIC_KEY_PEM && process.env.BOOTSTRAP_SELLER_PRIVATE_KEY_PEM
+      ? {
+          publicKeyPem: decodePemEnv(process.env.BOOTSTRAP_SELLER_PUBLIC_KEY_PEM),
+          privateKeyPem: decodePemEnv(process.env.BOOTSTRAP_SELLER_PRIVATE_KEY_PEM)
+        }
+      : null;
 
   const bootstrapSellers = [
     createSellerIdentity({
-      sellerId: "seller_foxlab",
-      subagentId: "foxlab.text.classifier.v1",
+      sellerId: process.env.BOOTSTRAP_SELLER_ID || "seller_foxlab",
+      subagentId: process.env.BOOTSTRAP_SUBAGENT_ID || "foxlab.text.classifier.v1",
       templateRef: "foxlab/text-classifier@v1",
       displayName: "Foxlab Text Classifier",
-      deliveryAddress: "foxlab+classifier@local-relay.test"
+      deliveryAddress:
+        process.env.BOOTSTRAP_DELIVERY_ADDRESS || "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+      apiKey: process.env.BOOTSTRAP_SELLER_API_KEY || null,
+      ownerUserId: process.env.BOOTSTRAP_SELLER_OWNER_USER_ID || null,
+      signing: bootstrapSellerSigning
     }),
     createSellerIdentity({
       sellerId: "seller_northwind",
       subagentId: "northwind.copywriter.v1",
       templateRef: "northwind/copywriter@v1",
       displayName: "Northwind Copywriter",
-      deliveryAddress: "northwind+copywriter@local-relay.test"
+      deliveryAddress: "local://relay/seller_northwind/northwind.copywriter.v1"
     })
   ];
 
@@ -223,6 +273,41 @@ export function createPlatformState(options = {}) {
       }))
     }
   };
+}
+
+export function serializePlatformState(state) {
+  return {
+    users: Array.from(state.users.entries()),
+    apiKeys: Array.from(state.apiKeys.entries()),
+    sellers: Array.from(state.sellers.entries()),
+    catalog: Array.from(state.catalog.entries()),
+    templates: Array.from(state.templates.entries()),
+    requests: Array.from(state.requests.entries()),
+    metricsEvents: state.metricsEvents
+  };
+}
+
+export function hydratePlatformState(state, snapshot) {
+  if (!snapshot) {
+    return state;
+  }
+
+  for (const [name, collection] of [
+    ["users", state.users],
+    ["apiKeys", state.apiKeys],
+    ["sellers", state.sellers],
+    ["catalog", state.catalog],
+    ["templates", state.templates],
+    ["requests", state.requests]
+  ]) {
+    collection.clear();
+    for (const [key, value] of snapshot[name] || []) {
+      collection.set(key, value);
+    }
+  }
+
+  state.metricsEvents.splice(0, state.metricsEvents.length, ...(snapshot.metricsEvents || []));
+  return state;
 }
 
 function resolveAuth(req, state) {
@@ -304,6 +389,17 @@ function issueTaskToken(state, auth, body) {
     return { error: "CATALOG_SUBAGENT_NOT_FOUND" };
   }
 
+  const request = getOrCreateRequest(state, body.request_id);
+  if (request.buyer_id && request.buyer_id !== auth.user_id) {
+    return { error: "AUTH_RESOURCE_FORBIDDEN", statusCode: 403 };
+  }
+  if (request.seller_id && request.seller_id !== body.seller_id) {
+    return { error: "REQUEST_BINDING_MISMATCH", statusCode: 409 };
+  }
+  if (request.subagent_id && request.subagent_id !== body.subagent_id) {
+    return { error: "REQUEST_BINDING_MISMATCH", statusCode: 409 };
+  }
+
   const issuedAt = Math.floor(Date.now() / 1000);
   const tokenTtlSeconds = Number(process.env.TOKEN_TTL_SECONDS || state.tokenTtlSeconds);
   const claims = {
@@ -319,7 +415,6 @@ function issueTaskToken(state, auth, body) {
     subagent_id: body.subagent_id
   };
   const token = signToken(state.tokenSecret, claims);
-  const request = getOrCreateRequest(state, body.request_id);
   request.buyer_id = auth.user_id;
   request.seller_id = body.seller_id;
   request.subagent_id = body.subagent_id;
@@ -328,13 +423,27 @@ function issueTaskToken(state, auth, body) {
   return { task_token: token, claims };
 }
 
-export function createPlatformServer({ state = createPlatformState(), serviceName = "platform-api" } = {}) {
+export function createPlatformServer({
+  state = createPlatformState(),
+  serviceName = "platform-api",
+  onStateChanged = null
+} = {}) {
   return http.createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", "http://localhost");
     const pathname = url.pathname;
 
     try {
+      if (method === "OPTIONS") {
+        res.writeHead(204, {
+          "access-control-allow-origin": "*",
+          "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+          "access-control-allow-headers": "Content-Type, Authorization, X-Platform-Api-Key"
+        });
+        res.end();
+        return;
+      }
+
       if (method === "GET" && pathname === "/healthz") {
         sendJson(res, 200, { ok: true, service: serviceName });
         return;
@@ -372,6 +481,7 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
           user_id: user.user_id,
           scopes: ["buyer"]
         });
+        await persistPlatformState(onStateChanged, state);
 
         sendJson(res, 201, user);
         return;
@@ -424,9 +534,10 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
 
         const issued = issueTaskToken(state, auth, body);
         if (issued.error) {
-          sendJson(res, 404, { error: issued.error });
+          sendJson(res, issued.statusCode || 404, { error: issued.error });
           return;
         }
+        await persistPlatformState(onStateChanged, state);
 
         sendJson(res, 201, issued);
         return;
@@ -506,13 +617,30 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
           }
         }
 
-        const request = getOrCreateRequest(state, requestId);
+        const request = state.requests.get(requestId);
+        if (!request) {
+          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          return;
+        }
+        if (request.buyer_id && request.buyer_id !== auth.user_id) {
+          sendJson(res, 403, { error: "AUTH_RESOURCE_FORBIDDEN" });
+          return;
+        }
+        if (request.seller_id && request.seller_id !== body.seller_id) {
+          sendJson(res, 409, { error: "REQUEST_BINDING_MISMATCH" });
+          return;
+        }
+        if (request.subagent_id && request.subagent_id !== body.subagent_id) {
+          sendJson(res, 409, { error: "REQUEST_BINDING_MISMATCH" });
+          return;
+        }
         request.buyer_id = auth.user_id;
         request.seller_id = body.seller_id;
         request.subagent_id = body.subagent_id;
         request.delivery_address = catalogItem.delivery_address;
         request.expected_signer_public_key_pem = catalogItem.seller_public_key_pem;
         appendRequestEvent(request, "DELIVERY_META_ISSUED", { actor_type: "buyer" });
+        await persistPlatformState(onStateChanged, state);
 
         sendJson(res, 200, {
           request_id: requestId,
@@ -528,22 +656,46 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
       const ackMatch = pathname.match(/^\/v1\/requests\/([^/]+)\/ack$/);
       if (method === "POST" && ackMatch) {
         const requestId = ackMatch[1];
-        const body = await parseJsonBody(req);
-        const auth = requireSeller(req, res, state, {
-          sellerId: body.seller_id,
-          subagentId: body.subagent_id
-        });
+        const auth = requireAuth(req, res, state);
         if (!auth) {
           return;
         }
+        if (auth.type !== "seller") {
+          sendJson(res, 403, { error: "AUTH_SCOPE_FORBIDDEN" });
+          return;
+        }
+        const body = await parseJsonBody(req);
+        if (!body.seller_id || !body.subagent_id) {
+          sendJson(res, 400, { error: "CONTRACT_INVALID_ACK_REQUEST" });
+          return;
+        }
+        if (auth.seller_id !== body.seller_id || !auth.subagent_ids.includes(body.subagent_id)) {
+          sendJson(res, 403, { error: "AUTH_RESOURCE_FORBIDDEN" });
+          return;
+        }
 
-        const request = getOrCreateRequest(state, requestId);
+        const request = state.requests.get(requestId);
+        if (!request) {
+          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          return;
+        }
+        if (request.seller_id && request.seller_id !== body.seller_id) {
+          sendJson(res, 409, { error: "REQUEST_BINDING_MISMATCH" });
+          return;
+        }
+        if (request.subagent_id && request.subagent_id !== body.subagent_id) {
+          sendJson(res, 409, { error: "REQUEST_BINDING_MISMATCH" });
+          return;
+        }
         request.seller_id = body.seller_id;
         request.subagent_id = body.subagent_id;
-        appendRequestEvent(request, "ACKED", {
-          actor_type: "seller",
-          eta_hint_s: Number(body.eta_hint_s || 0)
-        });
+        if (!request.events.some((event) => event.event_type === "ACKED" && event.actor_type === "seller")) {
+          appendRequestEvent(request, "ACKED", {
+            actor_type: "seller",
+            eta_hint_s: Number(body.eta_hint_s || 0)
+          });
+          await persistPlatformState(onStateChanged, state);
+        }
 
         sendJson(res, 202, { accepted: true, request_id: requestId });
         return;
@@ -559,6 +711,18 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
         const request = state.requests.get(eventMatch[1]);
         if (!request) {
           sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          return;
+        }
+        if (auth.type === "buyer" && request.buyer_id !== auth.user_id) {
+          sendJson(res, 403, { error: "AUTH_RESOURCE_FORBIDDEN" });
+          return;
+        }
+        if (
+          auth.type === "seller" &&
+          (request.seller_id !== auth.seller_id ||
+            (request.subagent_id && !auth.subagent_ids.includes(request.subagent_id)))
+        ) {
+          sendJson(res, 403, { error: "AUTH_RESOURCE_FORBIDDEN" });
           return;
         }
 
@@ -591,6 +755,7 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
             item.availability_status = body.status || "healthy";
           }
         }
+        await persistPlatformState(onStateChanged, state);
 
         sendJson(res, 202, {
           accepted: true,
@@ -623,6 +788,7 @@ export function createPlatformServer({ state = createPlatformState(), serviceNam
           recorded_at: nowIso()
         };
         state.metricsEvents.push(event);
+        await persistPlatformState(onStateChanged, state);
         sendJson(res, 202, { accepted: true, event });
         return;
       }
@@ -665,11 +831,54 @@ function isDirectRun() {
   return path.resolve(process.argv[1]) === __filename;
 }
 
+async function createOptionalPersistence(serviceName) {
+  const connectionString = process.env.DATABASE_URL || null;
+  if (connectionString) {
+    const store = await createPostgresSnapshotStore({
+      connectionString,
+      serviceName
+    });
+    await store.migrate();
+    return store;
+  }
+
+  const sqlitePath = process.env.SQLITE_DATABASE_PATH || null;
+  if (!sqlitePath) {
+    return null;
+  }
+
+  const store = await createSqliteSnapshotStore({
+    databasePath: sqlitePath,
+    serviceName
+  });
+  await store.migrate();
+  return store;
+}
+
 if (isDirectRun()) {
   const port = Number(process.env.PORT || 8080);
   const serviceName = process.env.SERVICE_NAME || "platform-api";
-  const server = createPlatformServer({ serviceName });
+  const state = createPlatformState();
+  const persistence = await createOptionalPersistence(serviceName);
+  if (persistence) {
+    hydratePlatformState(state, await persistence.loadSnapshot());
+  }
+  const server = createPlatformServer({
+    serviceName,
+    state,
+    onStateChanged: persistence
+      ? async (currentState) => {
+          await persistence.saveSnapshot(serializePlatformState(currentState));
+        }
+      : null
+  });
   server.listen(port, "0.0.0.0", () => {
     console.log(`[${serviceName}] listening on ${port}`);
+  });
+  server.on("close", () => {
+    if (persistence) {
+      void persistence.saveSnapshot(serializePlatformState(state));
+      void persistence.close();
+    }
   });
 }

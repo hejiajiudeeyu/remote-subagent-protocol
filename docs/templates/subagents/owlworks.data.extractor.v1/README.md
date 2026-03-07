@@ -37,7 +37,6 @@ OwlWorks Data Extractor — 从指定 URL 中提取结构化数据。
 
 ## 约束
 
-- 最大预算：$0.50/请求
 - 最大硬超时：600 秒
 - 推荐软超时：120 秒
 - 最大爬取页数：100
@@ -48,4 +47,4 @@ OwlWorks Data Extractor — 从指定 URL 中提取结构化数据。
 2. 参考 `example-contract.json` 构造任务合约
 3. 将 `input.schema.json` 中的字段填入 `task.input`
 4. 将 `output.schema.json` 直接用作 `task.output_schema`（或取子集）
-5. 发送邮件，等待结果，参考 `example-result.json` 了解返回格式
+5. 通过当前 transport 投递任务请求，等待结果，参考 `example-result.json` 了解返回格式

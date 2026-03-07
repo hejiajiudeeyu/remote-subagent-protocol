@@ -15,8 +15,6 @@
 
 暂不接受：
 - 与 MVP 边界无关的大规模重构
-- 将仓库主叙事重新收缩为单一 marketplace 产品
-- 直接引入复杂结算、争议仲裁或重型检索系统
 
 ## 2. 开发流程
 
@@ -45,9 +43,9 @@ PR 描述至少包含：
 ## 4. 文档改动要求
 
 涉及协议/接口/状态机的改动，必须同步更新：
-- `docs/architecture-mvp.md`
-- `docs/platform-api-v0.1.md`
-- `docs/integration-playbook-mvp.md`
+- `docs/l0/architecture.md`
+- `docs/l0/platform-api-v0.1.md`
+- `docs/l0/integration-playbook.md`
 
 如仅做探索性提案，请先发 ADR 或 Issue 讨论，不直接改主规范。
 

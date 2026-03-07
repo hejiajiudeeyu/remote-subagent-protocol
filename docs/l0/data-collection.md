@@ -1,13 +1,13 @@
 # Data Collection Plan（MVP）
 
-目的：定义服务端采集哪些数据，分别用于宣传、运营和产品优化。  
+目的：定义服务端采集哪些数据，分别用于协议观测、运行维护和实现演进。  
 原则：默认不采集任务正文，不采集长期密钥，不采集不必要个人信息。
 
 更新时间：2026-03-02
 
-## 1) 宣传（外部展示）
+## 1) 协议观测（外部可见）
 
-用于官网/榜单/案例展示的聚合信息：
+用于协议观测页或公开状态页的聚合信息：
 - `seller_id`, `subagent_id`, `display_name`, `capabilities`, `version`
 - `call_volume`（调用量）
 - `success_rate`, `timeout_rate`, `schema_compliance_rate`
@@ -17,18 +17,18 @@
 
 展示规则：
 - 仅展示聚合指标，不展示单条任务数据。
-- 样本不足（`sample_size < ranking_min_samples`）标注“样本不足”。
+- 展示时同时带出 `sample_size`，避免脱离样本量解读。
 
-## 2) 运营（运行与稳定性）
+## 2) 运行维护（稳定性）
 
-用于日常运维、SLA、异常排查：
+用于日常运维、时延观察、异常排查：
 - 心跳数据：`seller_id`, `timestamp`, `queue_depth`, `est_exec_p95_s`
-- 请求事件：`request_id`, `event_type(ACKED)`, `accepted_at`, `estimated_finish_at`
+- 请求事件：`request_id`, `event_type(ACKED)`, `at`, `eta_hint_s(optional)`
 - 指标事件：`source`, `event_type`, `timestamp`, `seller_id`, `subagent_id`
 - 目录变更审计：导入批次号、操作者、变更时间、变更项
 - token 审计摘要：签发时间、过期时间、`buyer_id/seller_id/subagent_id/request_id`（不存 token 明文）
 
-## 3) 优化（产品与路由）
+## 3) 实现演进（调优与路由）
 
 用于后续策略优化的数据：
 - 买家选路与结果：
@@ -39,18 +39,17 @@
   - `T_ack_wait`（发单到 ACK）
   - `T_result_wait`（ACK 到结果回包）
   - `T_total`（端到端）
-- 成本与质量：
-  - `budget_cap`
-  - `cost_estimate`
+- 质量与异常：
   - 校验失败类型（签名失败、schema 失败）
+  - 超时或拒绝原因摘要
 
-注：MVP 先以调用量与硬指标为主，不引入积分策略；积分策略在后续阶段单独设计。
+注：MVP 先以调用量与硬指标为主，不引入主观打分规则。
 
 ## 4) 明确不采集（MVP）
 
 - 任务正文 `task.input` 全量内容（默认不入库）
 - 结果正文 `result.output` 全量内容（默认不入库）
-- 邮件完整原文（仅保留必要元数据）
+- transport 原始消息全文（仅保留必要元数据）
 - token 原文与卖家私钥
 
 如确需采样内容用于质检，必须额外开关并做脱敏与最小化留存。
@@ -76,7 +75,7 @@
 
 ## 7) 对外口径建议
 
-对外宣传统一强调：
+对外说明统一强调：
 - 平台不转发任务正文
 - 平台默认不存任务/结果正文
-- 榜单基于聚合硬指标
+- 对外只公开聚合硬指标

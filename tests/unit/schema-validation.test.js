@@ -15,7 +15,9 @@ function validateWireResult(result, subagentId) {
   expect(result.seller_id).toMatch(/^seller_/);
   expect(["ok", "error"]).toContain(result.status);
   expect(result.timing).toBeTypeOf("object");
-  expect(result.usage).toBeTypeOf("object");
+  if ("usage" in result) {
+    expect(result.usage).toBeTypeOf("object");
+  }
   expect(result.signature_algorithm).toBe("Ed25519");
   expect(result.signer_public_key_pem).toContain("BEGIN PUBLIC KEY");
   expect(result.signature_base64).toBeTypeOf("string");

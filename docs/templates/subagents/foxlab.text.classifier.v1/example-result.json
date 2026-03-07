@@ -17,10 +17,6 @@
     "finished_at": "2026-03-02T11:20:21Z",
     "elapsed_ms": 3100
   },
-  "usage": {
-    "cost_estimate": 0.02,
-    "resource_units": 1
-  },
   "signature_algorithm": "Ed25519",
   "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nREPLACE_FOXLAB\n-----END PUBLIC KEY-----",
   "signature_base64": "seller_sig_v1_base64_placeholder"

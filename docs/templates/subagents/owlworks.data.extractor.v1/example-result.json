@@ -22,10 +22,6 @@
     "finished_at": "2026-03-02T14:01:42Z",
     "elapsed_ms": 90200
   },
-  "usage": {
-    "cost_estimate": 0.08,
-    "resource_units": 3
-  },
   "signature_algorithm": "Ed25519",
   "signer_public_key_pem": "-----BEGIN PUBLIC KEY-----\nREPLACE_OWLWORKS\n-----END PUBLIC KEY-----",
   "signature_base64": "seller_sig_v1_base64_placeholder"

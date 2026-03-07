@@ -4,7 +4,7 @@
   "created_at": "2026-03-02T14:00:00Z",
   "buyer": {
     "buyer_id": "buyer_dataops",
-    "reply_to": "buyer+extract@croc.tavern"
+    "return_route_hint": "local://buyer-agent/inbox/dataops"
   },
   "seller": {
     "seller_id": "seller_owlworks",
@@ -42,7 +42,6 @@
     }
   },
   "constraints": {
-    "budget_cap": 0.20,
     "soft_timeout_s": 120,
     "hard_timeout_s": 600
   },

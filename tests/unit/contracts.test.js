@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_DOMAIN, REQUEST_STATUS } from "../../packages/contracts/src/index.js";
+import { canonicalizeResultPackageForSignature, ERROR_DOMAIN, REQUEST_STATUS } from "../../packages/contracts/src/index.js";
 
 describe("@croc/contracts", () => {
   it("contains MVP request statuses", () => {
@@ -17,5 +17,30 @@ describe("@croc/contracts", () => {
     expect(Object.values(ERROR_DOMAIN)).toEqual(
       expect.arrayContaining(["AUTH", "CONTRACT", "EXEC", "RESULT", "DELIVERY", "TEMPLATE", "PLATFORM"])
     );
+  });
+
+  it("canonicalizes only signable result fields", () => {
+    expect(
+      canonicalizeResultPackageForSignature({
+        request_id: "req_1",
+        result_version: "0.1.0",
+        seller_id: "seller_foxlab",
+        subagent_id: "foxlab.text.classifier.v1",
+        status: "ok",
+        output: { summary: "done" },
+        timing: { elapsed_ms: 10 },
+        signature_algorithm: "Ed25519",
+        signature_base64: "x",
+        extra_field: true
+      })
+    ).toEqual({
+      request_id: "req_1",
+      result_version: "0.1.0",
+      seller_id: "seller_foxlab",
+      subagent_id: "foxlab.text.classifier.v1",
+      status: "ok",
+      output: { summary: "done" },
+      timing: { elapsed_ms: 10 }
+    });
   });
 });

@@ -2,9 +2,11 @@
 
 ## 关键澄清
 
+- 本图描述的是 post-L0 的 onboarding / 导入流程，不属于 L0 最小运行闭环。
+
 - v0.1 下 seller 不直接维护线上 subagent 列表；由平台导入并建立 `seller_id -> subagent_id` 关联。
-- seller agent 注册必须带 `owner_user_id`（提交人标识），用于审核与审计追踪。
-- 只有当 agent 审核通过并导入成功后，`owner_user_id` 才可激活 `seller` 角色能力。
+- remote subagent 注册必须带 `owner_user_id`（提交人标识），用于审核与审计追踪。
+- 只有当 onboarding 审核通过并导入成功后，`owner_user_id` 才可激活 `seller` 角色能力。
 - `template_ref` 是模板语义绑定键；buyer 消费模板时走平台 API 下发。
 - 注册与上架分离：`资料提交` 不等于 `active` 上架。
 - 权限来源：seller 权限来自该用户自己的 API Key；不是单独再签发“seller 专用 key”。
@@ -39,7 +41,7 @@ sequenceDiagram
     participant TPL as Template Store (Repo)
 
     SU->>PORTAL: [A1-REQ] 填写 subagent 信息与模板引用（含 owner_user_id）
-    PORTAL->>P: [A2-REQ] POST /v1/catalog/subagents (draft, owner_user_id)
+    PORTAL->>P: [A2-REQ] 提交 remote subagent 草案（接口形态后续确定）
 
     P->>P: [B1-ACT] 校验字段完整性（seller_id/subagent_id/capabilities 等）
     P->>IAM: [B1A-REQ] 校验 owner_user_id 对 seller_id 的提交权限

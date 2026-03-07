@@ -7,7 +7,7 @@
 - `tests/unit`：纯逻辑单测
 - `tests/integration`：单服务集成测试（HTTP + 内存状态）
 - `tests/e2e`：三端联调场景（成功/超时/token 过期/结果不合规）
-- `tests/mocks`：联调 mock（平台、邮件总线、时钟）
+- `tests/mocks`：联调 mock（平台、transport 总线、时钟）
 - `tests/helpers`：测试工具函数
 - `tests/reports`：测试运行产物（`latest.json`）
 

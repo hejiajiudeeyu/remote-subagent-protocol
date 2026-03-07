@@ -16,7 +16,7 @@
 
 | 参数 | 建议值 | 状态 | 说明 |
 |---|---:|---|---|
-| `ack_deadline_s` | `120` | FROZEN | 买家发单后等待 ACK 的最大时长（含邮件投递延迟） |
+| `ack_deadline_s` | `120` | FROZEN | 买家发单后等待 ACK 的最大时长（含 transport 投递延迟） |
 | `soft_timeout_s` | `90` | FROZEN | 软超时，触发告警或降级 |
 | `hard_timeout_s` | `300` | FROZEN | 硬超时，买家终止等待并记超时 |
 | `timeout_confirmation_mode` | `ask_by_default` | FROZEN | 达到 `soft_timeout_s` 时默认先询问 Buyer Agent 是否继续等待 |
@@ -25,15 +25,15 @@
 | `buyer_controller_poll_interval_backoff_s` | `15` | FROZEN | Buyer Agent 轮询 Controller 的退避间隔（30 秒后） |
 | `max_retry_attempts` | `2` | FROZEN | 最大重试次数（总尝试数=3） |
 | `retry_backoff` | `exponential + jitter` | FROZEN | 重试退避策略 |
-| `email_delivery_budget_s` | `60` | FROZEN | 邮件投递预算，用于超时分层计算 |
+| `delivery_observation_window_s` | `60` | FROZEN | transport 投递观测窗口，用于超时分层计算 |
 
 ## 2) Token 与安全
 
 | 参数 | 建议值 | 状态 | 说明 |
 |---|---:|---|---|
-| `token_ttl_seconds` | `900` | FROZEN | 任务 token 有效期（15 分钟，覆盖邮件投递延迟） |
-| `token_min_ttl_seconds` | `600` | FROZEN | 最短建议有效期 |
-| `token_max_ttl_seconds` | `1200` | FROZEN | 最长建议有效期 |
+| `token_ttl_seconds` | `300` | FROZEN | 任务 token 有效期（当前实现默认 5 分钟） |
+| `token_min_ttl_seconds` | `300` | FROZEN | v0.1 最短建议有效期 |
+| `token_max_ttl_seconds` | `300` | FROZEN | v0.1 当前冻结为单一 TTL |
 | `result_signature_algorithm` | `Ed25519` | FROZEN | 结果包签名算法 |
 | `seller_token_validation_mode` | `online_introspect_required` | FROZEN | 卖家校验 token 统一走 `POST /v1/tokens/introspect` |
 | `idempotency_window_hours` | `24` | FROZEN | `request_id` 去重窗口 |
@@ -62,26 +62,22 @@
 | `template_delivery_mode` | `platform_api_bundle` | FROZEN | Buyer 通过平台 API 拉取模板包，不直接读取仓库目录 |
 | `catalog_expose_delivery_address` | `false` | FROZEN | 目录批量查询不返回投递地址 |
 | `delivery_meta_mode` | `request_scoped` | FROZEN | 通过 `POST /v1/requests/{request_id}/delivery-meta` 单次下发 |
-| `delivery_meta_ttl_seconds` | `900` | FROZEN | 投递元数据有效期（与 token TTL 对齐） |
+| `delivery_meta_ttl_seconds` | `300` | FROZEN | 投递元数据有效期（与 token TTL 对齐） |
 
 ## 5) 指标与展示
 
 | 参数 | 建议值 | 状态 | 说明 |
 |---|---:|---|---|
 | `metrics_windows` | `24h,7d` | FROZEN | 默认指标窗口 |
-| `ranking_min_samples` | `30` | FROZEN | 排序最小样本量门槛 |
 | `mvp_display_metrics` | `call_volume,success_rate,timeout_rate,schema_compliance_rate,p95_exec_ms` | FROZEN | MVP 对外展示硬指标 |
 | `buyer_event_required` | `request_sent,request_acked,request_succeeded,request_timeout,result_schema_invalid,result_signature_invalid` | FROZEN | 买家最小事件集 |
 | `seller_event_required` | `request_received,request_accepted,request_succeeded,request_timeout` | FROZEN | 卖家最小事件集 |
 
-## 6) 定价与结算
+说明：
+- `POST /v1/metrics/events` 建议在 L0 实现最小接收能力。
+- `GET /v1/metrics/summary` 属于可延后增强，不阻塞 L0 协议闭环。
 
-| 参数 | 建议值 | 状态 | 说明 |
-|---|---:|---|---|
-| `pricing_mode` | `reference_only` | FROZEN | pricing 字段仅作参考提示，不触发计费 |
-| `settlement_enabled` | `false` | FROZEN | MVP 不启用结算 |
-
-## 7) 版本与兼容
+## 6) 版本与兼容
 
 | 参数 | 建议值 | 状态 | 说明 |
 |---|---:|---|---|
@@ -92,21 +88,21 @@
 | `request_event_scope_v0_1` | `ACKED_only` | FROZEN | v0.1 仅实现 ACK 事件，不实现进度事件 |
 | `platform_storage_backend` | `PostgreSQL` | FROZEN | 服务端主存储选型 |
 | `api_auth_mode` | `api_key` | FROZEN | 控制面 API 鉴权方式 |
-| `identity_onboarding_mode` | `register_buyer_default_then_activate_seller_on_agent_approval` | FROZEN | 用户注册后默认 buyer；seller 角色在 agent 审核通过后激活 |
+| `identity_onboarding_mode` | `register_buyer_default_then_activate_seller_on_remote_subagent_onboarding` | FROZEN | 用户注册后默认 buyer；seller 角色在 remote subagent onboarding/导入后激活 |
 | `seller_identity_cardinality` | `one_seller_per_user` | FROZEN | v0.1 一个 user 仅绑定一个 seller_id |
-| `catalog_submission_mode` | `form_submit_then_cli_review_import` | FROZEN | 表单收集后由 CLI 审核导入 |
+| `catalog_submission_mode` | `form_submit_then_cli_review_import` | FROZEN | 当前采用表单收集后由 CLI 审核导入；该流程不阻塞 L0 主闭环 |
 
-## 8) 核心参数确认结果
+## 7) 核心参数确认结果
 
 以下 8 项已确认并冻结（可直接进入实现）：
 1. `ack_deadline_s=120`
-2. `token_ttl_seconds=900`
+2. `token_ttl_seconds=300`
 3. `soft_timeout_s=90`, `hard_timeout_s=300`
 4. `max_retry_attempts=2`, `retry_backoff=exponential+jitter`
 5. `result_signature_algorithm=Ed25519`
 6. `heartbeat_interval_s=30`, `degraded_threshold_s=90`, `offline_threshold_s=180`
 7. `catalog_default_availability_filter=healthy`
-8. `ranking_min_samples=30`
+8. `mvp_display_metrics=call_volume,success_rate,timeout_rate,schema_compliance_rate,p95_exec_ms`
 
 补充实现决议：
 - `seller_token_validation_mode=online_introspect_required`
@@ -116,22 +112,53 @@
 - `seller_subagent_binding_mode=platform_import_association`
 - `catalog_expose_delivery_address=false`
 - `delivery_meta_mode=request_scoped`
-- `delivery_meta_ttl_seconds=900`
+- `delivery_meta_ttl_seconds=300`
 - `api_auth_mode=api_key`
-- `identity_onboarding_mode=register_buyer_default_then_activate_seller_on_agent_approval`
+- `identity_onboarding_mode=register_buyer_default_then_activate_seller_on_remote_subagent_onboarding`
 - `seller_identity_cardinality=one_seller_per_user`
 - `catalog_submission_mode=form_submit_then_cli_review_import`
 
-## 9) 本地配置覆盖（无 `.env.example`）
+## 8) 本地配置覆盖
 
-当前仓库不新增 `.env.example`，本地通过运行环境变量覆盖默认值。
+仓库根目录提供了 `.env.example`，只列出当前实现与 compose 联调中真实生效的环境变量。
 
 建议覆盖项（示例）：
+- `TOKEN_TTL_SECONDS=300`
+- `BOOTSTRAP_SELLER_ID=seller_...`
+- `BOOTSTRAP_SUBAGENT_ID=subagent.namespace.v1`
+- `BOOTSTRAP_DELIVERY_ADDRESS=local://relay/...`
+- `BOOTSTRAP_SELLER_API_KEY=...`
+- `BOOTSTRAP_SELLER_PUBLIC_KEY_PEM=...`
+- `BOOTSTRAP_SELLER_PRIVATE_KEY_PEM=...`
+- `ACK_DEADLINE_S=120`
 - `TIMEOUT_CONFIRMATION_MODE=ask_by_default|always_continue|always_finalize`
 - `HARD_TIMEOUT_AUTO_FINALIZE=true|false`
 - `BUYER_CONTROLLER_POLL_INTERVAL_ACTIVE_S=5`
 - `BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S=15`
+- `PLATFORM_API_BASE_URL=http://platform-api:8080`
+- `PLATFORM_API_KEY=...`
+- `DATABASE_URL=postgresql://...`
+- `SQLITE_DATABASE_PATH=./data/croc.sqlite`
+- `PORT=8080|8081|8082`
+- `SERVICE_NAME=platform-api|buyer-controller|seller-controller`
+- `SELLER_ID=seller_...`
+- `SUBAGENT_IDS=subagent.a.v1,subagent.b.v1`
+- `SELLER_SIGNING_PUBLIC_KEY_PEM=...`
+- `SELLER_SIGNING_PRIVATE_KEY_PEM=...`
+- `SELLER_MAX_HARD_TIMEOUT_S=300`
+- `SELLER_ALLOWED_TASK_TYPES=extract,classify`
+- `SELLER_HEARTBEAT_INTERVAL_MS=30000`
 
 说明：
 - 未设置时，行为以本文件冻结默认值为准。
+- `PLATFORM_API_BASE_URL` / `PLATFORM_API_KEY` 当前由 Buyer/Seller app 启动层读取，用于装配平台 client。
+- `DATABASE_URL` 当前由 Platform/Buyer/Seller app 启动层读取；若配置，则会自动执行 migration 并启用 PostgreSQL 状态快照持久化。
+- `SQLITE_DATABASE_PATH` 当前由 Platform/Buyer/Seller app 启动层读取；仅在未设置 `DATABASE_URL` 时生效，用于单机 SQLite 快照持久化。
+- `BOOTSTRAP_*` 当前由 Platform app 启动层读取，用于固定 compose/本地联调时的第一组 bootstrap seller 身份。
+- Seller 的 `SELLER_*` 变量当前只影响 app 启动层的运行时身份和签名 key 装配。
+- `SELLER_MAX_HARD_TIMEOUT_S` / `SELLER_ALLOWED_TASK_TYPES` 当前由 Seller app 启动层读取，用于装配最小 guardrail。
+- `SELLER_HEARTBEAT_INTERVAL_MS` 当前由 Seller app 启动层读取，用于启动心跳周期任务。
+- 存储后端优先级：`DATABASE_URL` > `SQLITE_DATABASE_PATH`。
+- 定位建议：`PostgreSQL` 作为默认/推荐后端；`SQLite` 仅作为单机部署、演示或本地开发的便利选项。
+- `.env.example` 当前不包含尚未接入运行时的链路切换变量；例如 `TRANSPORT_MODE` 仍属于后续实现，不应提前伪装成已生效配置。
 - 若实现侧采用配置文件（如 YAML/TOML），需保持与上述变量语义一致。

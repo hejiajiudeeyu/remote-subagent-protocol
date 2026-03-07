@@ -1,7 +1,7 @@
 # Protocol Control Plane API v0.1（MVP）
 
 本文档定义 `Remote Subagent Protocol` 的最小控制面 API：身份、目录、模板下发、token、请求事件、指标。  
-当前仓库已实现的联调模式为 `L0 local transport`；控制面只依赖 `Transport Adapter` 抽象，`Email MCP` 只是候选外部通信模式之一。这里描述的是协议参考控制面，而不是要求所有实现共享同一个托管市场后端。
+当前仓库已实现的联调模式为 `L0 local transport`；控制面只依赖 `Transport Adapter` 抽象，`Email MCP` 只是候选外部通信模式之一。这里描述的是协议参考控制面，而不是要求所有实现共享同一个集中式托管后端。
 
 ## 1. 设计边界
 
@@ -18,7 +18,7 @@
 ## 2.2 鉴权（v0.1 冻结）
 - 统一使用 `API Key` 鉴权。
 - 建议请求头：`Authorization: Bearer <API_KEY>`。
-- API Key 绑定 `user_id + role_scopes`，服务端按 scope 与资源归属做鉴权（默认 `buyer`，seller agent 审核通过后激活 `seller`）。
+- API Key 绑定 `user_id + role_scopes`，服务端按 scope 与资源归属做鉴权（默认 `buyer`，当对应 remote subagent 完成 onboarding/导入后可激活 `seller`）。
 
 当前实现补充：
 - `POST /v1/tokens/task`、`POST /v1/requests/{request_id}/delivery-meta`：要求 `buyer` 身份。
@@ -30,8 +30,8 @@
 - 分页：使用 `next_page_token`
 - `user_id`：用户主体标识（注册后默认具备 `buyer`）
 - `buyer_id`：v0.1 默认与 `user_id` 同值映射
-- `seller_id`：首次 seller agent 审核通过后创建并绑定 `owner_user_id`
-- `owner_user_id`：seller agent 提交人与资源归属主键（`owner_user_id -> seller_id -> subagent_id`）
+- `seller_id`：首次 remote subagent onboarding 审核通过后创建并绑定 `owner_user_id`
+- `owner_user_id`：remote subagent 提交人与资源归属主键（`owner_user_id -> seller_id -> subagent_id`）
 
 ## 2.4 通用错误响应
 
@@ -60,7 +60,7 @@
 - `AUTH_KEY_REVOKED`：API Key 已吊销
 - `AUTH_SCOPE_FORBIDDEN`：调用方缺少所需 scope（如缺少 `seller`）
 - `AUTH_RESOURCE_FORBIDDEN`：scope 正确但资源归属不匹配
-- `AUTH_ROLE_NOT_ACTIVATED`：seller 角色尚未激活（agent 尚未审核通过）
+- `AUTH_ROLE_NOT_ACTIVATED`：seller 角色尚未激活（remote subagent 尚未完成 onboarding/导入）
 
 ## 2.5 用户注册 API
 
@@ -86,7 +86,7 @@
 
 说明：
 - `api_key` 明文仅返回一次，服务端仅保存摘要。
-- 注册不会直接激活 `seller`；需 seller agent 审核通过后激活。
+- 注册不会直接激活 `seller`；需对应 remote subagent 完成 onboarding/导入后激活。
 
 ## 3. 目录 API
 
@@ -96,12 +96,10 @@
 - 用途：买家检索可调用 subagent
 
 Query 参数：
-- `capability`（可选）
-- `seller_id`（可选）
 - `status`（可选，默认 `active`）
 - `availability_status`（可选，`healthy|degraded|offline`）
-- `page_size`（可选，默认 20，最大 100）
-- `page_token`（可选）
+- `capability`（可选，若目录实现支持）
+- `seller_id`（可选，若目录实现支持）
 
 200 响应示例：
 ```json
@@ -120,10 +118,6 @@ Query 参数：
       "sla_hint": {
         "p95_exec_ms": 3500,
         "timeout_rate_7d": 0.02
-      },
-      "pricing_hint": {
-        "currency": "USD",
-        "per_request": 0.02
       },
       "eta_hint": {
         "queue_p50_s": 8,
@@ -146,12 +140,14 @@ Query 参数：
 `GET /v1/catalog/subagents`（以及后续 `GET /v1/catalog/search`）应保证以下字段可用：
 
 - 身份：`subagent_id`、`seller_id`
+- 展示：`display_name`
 - 可用性：`status`、`availability_status`、`last_heartbeat_at`
-- 能力：`capabilities[]`、`supported_task_types[]`、`version`
-- 质量与时效：`sla_hint.p95_exec_ms`、`sla_hint.timeout_rate_7d`、`eta_hint.exec_p95_s`
-- 成本：`pricing_hint.currency`、`pricing_hint.per_request`
 - 验签材料：`seller_public_key_pem`（公钥轮换窗口可返回 `seller_public_keys_pem[]`）
 - 合约构建入口：`template_ref`
+
+以下字段属于推荐增强，不是 L0 必备：
+- `capabilities[]`、`supported_task_types[]`、`version`
+- `sla_hint.*`、`eta_hint.*`
 
 `GET /v1/catalog/search` 额外字段（仅搜索模式）：
 - `score`、`match_reasons`、`score_breakdown`
@@ -159,58 +155,16 @@ Query 参数：
 说明（可扩展性）：
 - 当前建议优先使用遍历/分类过滤。
 - `delivery_address` 不在目录批量接口返回；买家需在 token 签发后按 `request_id` 单次申请投递元数据。
+- `delivery_address` 的值只保证是可投递的 opaque transport endpoint，不保证是邮箱地址、URL 或固定 URI 形态。
 - 当前实现会在目录列表直接返回 `seller_public_key_pem`，供 Buyer 在创建本地请求记录与验签时绑定信任根。
 - 后续可新增 `GET /v1/catalog/search`，支持联想、模糊匹配与领域策略。
 - 为保持兼容，`GET /v1/catalog/subagents` 长期保留，不因搜索增强而下线。
 
-## 3.2 注册/更新 subagent（MVP 可手工导入）
+## 3.2 subagent registration / catalog submission
 
-- 方法：`POST /v1/catalog/subagents`
-- 用途：提交 seller agent 草案（或更新申请），进入审核/导入流程
-- 说明：MVP 可不对外开放该 API，先采用线下手工导入模板。
-- 说明：v0.1 中 seller 不自行维护 subagent 列表，平台在导入时完成 `seller_id -> subagent_id` 关联。
-
-请求字段（Body）：
-- `owner_user_id`（必填，且需与 API Key 绑定的 `user_id` 一致）
-- `subagent_id`（必填）
-- `seller_id`（可选；首次提交可省略，由平台在审核通过后生成）
-- `display_name`（必填）
-- `description`（可选）
-- `capabilities`（必填，字符串数组）
-- `version`（必填）
-- `status`（可选，默认 `draft_pending_review`）
-- `delivery_address`（必填，seller 任务投递邮箱；用于 `delivery-meta` 单次下发）
-- `contact.email`（必填）
-- `support_email`（必填）
-- `endpoint_hint`（可选，仅元数据，不用于任务转发）
-- `supported_task_types`（必填，字符串数组）
-- `constraints.max_budget_cap`（可选）
-- `constraints.max_hard_timeout_s`（可选）
-- `eta_hint.queue_p50_s`（可选）
-- `eta_hint.exec_p50_s`（可选）
-- `eta_hint.exec_p95_s`（可选）
-- `eta_hint.sample_size_7d`（可选）
-- `eta_hint.updated_at`（可选）
-- `seller_public_key_pem`（必填）
-- `template_ref`（可选，模板语义绑定键，可为路径样式或版本化标识）
-- `updated_at`（可选）
-
-201 响应示例：
-```json
-{
-  "owner_user_id": "user_01htz0demo",
-  "seller_id": "seller_user_01htz0demo",
-  "subagent_id": "foxlab.text.classifier.v1",
-  "status": "draft_pending_review",
-  "review_status": "pending",
-  "submitted_at": "2026-03-05T08:30:00Z"
-}
-```
-
-约束：
-- 调用方至少具备 `buyer` scope（默认即有）。
-- 仅允许提交/更新自身资源：`owner_user_id` 必须匹配调用方 `user_id`。
-- 返回 `active` 前必须经过审核与导入流程；首次 `active` 成功会触发 seller 角色激活。
+- 不属于 L0 基线。
+- v0.1 当前默认采用线下手工导入目录模板，而不是开放正式提交 API。
+- 若后续需要在线提交 remote subagent 草案，再单独定义 `POST /v1/catalog/subagents` 的请求、审核与导入语义。
 
 ## 3.3 获取能力声明模板包
 
@@ -229,29 +183,26 @@ Query 参数：
 200 响应示例：
 ```json
 {
-  "subagent_id": "foxlab.text.classifier.v1",
   "template_ref": "docs/templates/subagents/foxlab.text.classifier.v1/",
-  "template_version": "2026-03-02T12:00:00Z",
   "input_schema": {
     "type": "object"
   },
   "output_schema": {
     "type": "object"
-  },
-  "example_contract": {
-    "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41"
-  },
-  "example_result": {
-    "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
-    "status": "ok"
-  },
-  "readme_markdown": "# FoxLab Text Classifier\\n..."
+  }
 }
 ```
 
-响应头建议：
-- `ETag: "<template_digest>"`
-- `Cache-Control: private, max-age=300`
+L0 最小要求：
+- `input_schema`
+- `output_schema`
+
+可选增强字段：
+- `example_contract`
+- `example_result`
+- `readme_markdown`
+- `template_version`
+- `ETag`
 
 状态码约定：
 - `200`：返回模板包
@@ -268,11 +219,12 @@ Query 参数：
 
 请求字段（Body）：
 - `request_id`
-- `buyer_id`
 - `seller_id`
 - `subagent_id`
-- `budget_cap`
-- `ttl_seconds`（建议 600-1200）
+
+说明：
+- `buyer_id` 由 API Key 绑定身份推导，不要求调用方显式传入。
+- `ttl_seconds` 不属于 L0 必填参数；v0.1 默认使用平台冻结的 `token_ttl_seconds`。
 
 201 响应示例（当前实现）：
 ```json
@@ -284,6 +236,8 @@ Query 参数：
     "sub": "buyer_acme",
     "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
     "subagent_id": "foxlab.text.classifier.v1",
+    "iat": 1770004200,
+    "jti": "tok_01htz0demo",
     "exp": 1770005100
   }
 }
@@ -324,15 +278,21 @@ Query 参数：
 - 方法：`POST /v1/metrics/events`
 - 用途：买家/卖家提交最小观测事件
 
+说明：
+- 不属于 L0 闭环的阻塞接口。
+- L0 可以先实现最小事件接收；聚合分析属于后续增强。
+
 请求字段（Body）：
 - `source`：`buyer|seller`
 - `event_type`：如 `request_succeeded|request_timeout|schema_invalid|signature_invalid`
-- `request_id`
+- `request_id`（可选）
+- `timestamp`（可选）
+- `payload`（可选，扩展）
+
+扩展字段（可选）：
 - `buyer_id`
 - `seller_id`
 - `subagent_id`
-- `timestamp`
-- `payload`（可选，扩展）
 
 鉴权约束：
 - `source=buyer`：需具备 `buyer` scope。
@@ -341,15 +301,18 @@ Query 参数：
 202 响应示例：
 ```json
 {
-  "accepted": true,
-  "ingested_at": "2026-03-02T12:10:00Z"
+  "accepted": true
 }
 ```
 
 ## 5.2 聚合查询
 
 - 方法：`GET /v1/metrics/summary`
-- 用途：为榜单和评测展示提供聚合硬指标
+- 用途：提供协议观测与实现对照所需的聚合硬指标
+
+说明：
+- 不属于 L0 最小闭环。
+- 若实现方尚未具备聚合能力，可延后到后续版本。
 
 Query 参数：
 - `window`（如 `24h|7d|30d`）
@@ -403,18 +366,15 @@ Path 参数：
   "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
   "seller_id": "seller_foxlab",
   "subagent_id": "foxlab.text.classifier.v1",
-  "delivery_address": "tasks@foxlab.example",
-  "thread_policy": {
-    "subject_prefix": "[CROC][TASK]",
-    "reply_mode": "same_thread_required"
-  },
+  "delivery_address": "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+  "thread_hint": "req:018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
   "seller_public_key_pem": "-----BEGIN PUBLIC KEY-----..."
 }
 ```
 
 状态码约定：
-- `404`：`DELIVERY_META_NOT_FOUND`
-- `409`：`DELIVERY_META_MISMATCH`（与 token/目录绑定不一致）
+- `404`：目录或请求不存在
+- `403/409`：与 token/目录绑定不一致
 
 ## 6.2 卖家 ACK（已接单）
 
@@ -427,24 +387,18 @@ Path 参数：
 请求字段（Body）：
 - `seller_id`（必填）
 - `subagent_id`（必填）
-- `accepted_at`（必填）
-- `ack_deadline_s`（可选，默认 120）
-- `estimated_finish_at`（可选）
-- `queue_position`（可选）
-- `message`（可选，简短说明）
+- `eta_hint_s`（可选）
 
 约束：
 - 对同一 `request_id` 幂等。
 - 平台校验调用方具备 `seller` scope 且 `owner_user_id -> seller_id -> subagent_id` 绑定命中。
 - 可校验是否与已签发 token 的 `aud/subagent_id` 对齐。
 
-200 响应示例：
+202 响应示例：
 ```json
 {
-  "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
-  "event_type": "ACKED",
   "accepted": true,
-  "accepted_at": "2026-03-02T12:00:20Z"
+  "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41"
 }
 ```
 
@@ -475,8 +429,8 @@ Path 参数：
 - 用途：买家轮询 ACK/状态事件，减少盲等
 
 Query 参数：
-- `since`（可选，ISO8601 或游标）
-- `limit`（可选，默认 50）
+- `since`（可选，后续增量查询预留）
+- `limit`（可选，后续分页预留）
 
 200 响应示例：
 ```json
@@ -485,13 +439,11 @@ Query 参数：
   "events": [
     {
       "event_type": "ACKED",
-      "seller_id": "seller_foxlab",
-      "subagent_id": "foxlab.text.classifier.v1",
-      "timestamp": "2026-03-02T12:00:20Z",
-      "estimated_finish_at": "2026-03-02T12:01:10Z"
+      "at": "2026-03-02T12:00:20Z",
+      "actor_type": "seller",
+      "eta_hint_s": 12
     }
-  ],
-  "next_cursor": null
+  ]
 }
 ```
 
@@ -508,24 +460,21 @@ Path 参数：
 - `seller_id`
 
 请求字段（Body）：
-- `seller_id`（必填，需与 path 一致）
-- `timestamp`（必填）
-- `agent_version`（可选）
+- `status`（可选，默认 `healthy`）
 - `queue_depth`（可选）
 - `est_exec_p95_s`（可选）
-- `active_subagents`（可选）
 
 鉴权约束：
 - 调用方需具备 `seller` scope。
 - 平台需校验 `owner_user_id -> seller_id` 绑定关系。
 
-200 响应示例：
+202 响应示例：
 ```json
 {
   "accepted": true,
   "seller_id": "seller_foxlab",
-  "received_at": "2026-03-02T12:00:30Z",
-  "availability_status": "healthy"
+  "status": "healthy",
+  "last_heartbeat_at": "2026-03-02T12:00:30Z"
 }
 ```
 
@@ -546,13 +495,16 @@ MVP 目录注册采用手工导入，模板文件见：
 - `docs/templates/catalog-subagent.template.json`（单条模板）
 - `docs/templates/catalog-subagents.import.template.ndjson`（批量模板）
 
-能力声明模板（详见 `architecture-mvp.md` §4.5）：
+能力声明模板（详见 `architecture.md` §4.5）：
 - 每个 subagent 在 `docs/templates/subagents/{subagent_id}/` 下维护 `input.schema.json`、`output.schema.json`、`example-contract.json`、`example-result.json`、`README.md`。
 - 目录条目通过 `template_ref` 字段绑定模板语义，买家选定 subagent 后通过 `GET /v1/catalog/subagents/{subagent_id}/template-bundle` 拉取模板包。
 
 建议导入流程：
+本节属于 post-L0 onboarding 规划，不是 v0.1 L0 必需能力。
+
+后续若恢复在线/半在线 onboarding，建议流程为：
 1. 用户先调用 `POST /v1/users/register` 完成注册（默认 `buyer`）。
-2. 用户提交 seller agent 草案（携带 `owner_user_id`）。
+2. 用户提交 remote subagent 草案（携带 `owner_user_id`）。
 3. 平台管理员在模板中填写/修订 `subagent_id/seller_id/capabilities/supported_task_types` 并建立关联。
 4. 使用 CLI 执行校验与审核导入。
 5. 首次导入成功后，平台激活该用户 `seller` scope，并记录资源绑定关系。
@@ -560,16 +512,18 @@ MVP 目录注册采用手工导入，模板文件见：
 
 ## 9. 检索增强预留（后续规划，不在 v0.1 实现）
 
-为支持搜索引擎式能力，建议预留以下查询参数/字段：
+本节属于 post-L0 检索增强规划，不是 v0.1 L0 必需能力。
+
+为支持增强检索能力，建议预留以下查询参数/字段：
 - `q`：自由文本查询
 - `fuzzy`：模糊匹配开关
 - `domain`：领域策略（如 `legal|finance|biomed`）
-- `ranking_profile`：排序策略标识
+- `filter_profile`：筛选策略标识
 
 建议预留以下响应字段：
 - `score`：综合相关性分
 - `match_reasons`：命中原因（关键词、同义词、标签）
-- `score_breakdown`：分项得分（文本匹配、质量、可用性、成本）
+- `score_breakdown`：分项得分（文本匹配、质量、可用性）
 
 兼容原则：
 - 新字段仅追加，不破坏旧字段语义。

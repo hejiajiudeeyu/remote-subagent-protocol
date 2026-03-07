@@ -12,6 +12,10 @@
     "dev:platform": "npm --workspace @croc/platform-api run dev",
     "dev:buyer": "npm --workspace @croc/buyer-controller run dev",
     "dev:seller": "npm --workspace @croc/seller-controller run dev",
+    "start:playground": "python3 scripts/playground.py start",
+    "start:playground:daemon": "python3 scripts/playground.py daemon",
+    "stop:playground": "python3 scripts/playground.py stop",
+    "status:playground": "python3 scripts/playground.py status",
     "dev": "echo \"Run one app via dev:platform/dev:buyer/dev:seller\"",
     "start": "echo \"Use app-level start scripts or docker compose\"",
     "test": "npm run test:unit && npm run test:integration && npm run test:e2e",
@@ -32,6 +36,11 @@
   "devDependencies": {
     "@vitest/ui": "^3.2.4",
     "ajv": "^8.17.1",
+    "pg": "^8.20.0",
+    "pg-mem": "^3.0.14",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
   }
 }

@@ -59,6 +59,20 @@ async function jsonRequest(baseUrl, path, options = {}) {
   };
 }
 
+async function waitFor(fn, { timeoutMs = 30000, intervalMs = 200 } = {}) {
+  const started = Date.now();
+  for (;;) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (Date.now() - started >= timeoutMs) {
+        throw error;
+      }
+      await sleep(intervalMs);
+    }
+  }
+}
+
 async function runScenario() {
   const platform = "http://127.0.0.1:8080";
   const buyer = "http://127.0.0.1:8081";
@@ -108,49 +122,69 @@ async function runScenario() {
     throw new Error(`buyer_request_create_failed: ${requestCreated.status}`);
   }
 
-  await jsonRequest(buyer, `/controller/requests/${requestId}/mark-sent`, { method: "POST" });
-  await jsonRequest(buyer, `/controller/requests/${requestId}/ack`, { method: "POST" });
+  const deliveryMeta = await jsonRequest(platform, `/v1/requests/${requestId}/delivery-meta`, {
+    method: "POST",
+    headers: auth,
+    body: {
+      seller_id: selected.seller_id,
+      subagent_id: selected.subagent_id,
+      task_token: token.body.task_token
+    }
+  });
+  if (deliveryMeta.status !== 200) {
+    throw new Error(`delivery_meta_failed: ${deliveryMeta.status}`);
+  }
 
-  const task = await jsonRequest(seller, "/controller/tasks", {
+  const dispatched = await jsonRequest(buyer, `/controller/requests/${requestId}/dispatch`, {
     method: "POST",
     body: {
-      request_id: requestId,
-      subagent_id: selected.subagent_id,
+      task_token: token.body.task_token,
+      to: deliveryMeta.body.delivery_address,
       simulate: "success",
       delay_ms: 80
     }
   });
-  if (task.status !== 202) {
-    throw new Error(`seller_task_enqueue_failed: ${task.status}`);
+  if (dispatched.status !== 202) {
+    throw new Error(`buyer_dispatch_failed: ${dispatched.status}`);
   }
 
-  const started = Date.now();
-  for (;;) {
-    const result = await jsonRequest(seller, `/controller/tasks/${task.body.task_id}/result`);
-    if (result.status === 200 && result.body?.available === true) {
-      const accepted = await jsonRequest(buyer, `/controller/requests/${requestId}/result`, {
-        method: "POST",
-        body: result.body.result_package
-      });
-      if (accepted.status !== 200) {
-        throw new Error(`buyer_result_accept_failed: ${accepted.status}`);
-      }
-      break;
-    }
-
-    if (Date.now() - started > 30000) {
-      throw new Error("seller_result_timeout");
-    }
-
-    await sleep(200);
+  const pulled = await jsonRequest(seller, "/controller/inbox/pull", {
+    method: "POST",
+    body: {}
+  });
+  if (pulled.status !== 200 || pulled.body?.accepted?.length !== 1) {
+    throw new Error(`seller_pull_failed: ${pulled.status}`);
   }
+
+  const events = await waitFor(async () => {
+    const polled = await jsonRequest(platform, `/v1/requests/${requestId}/events`, {
+      headers: auth
+    });
+    if (polled.status !== 200 || !polled.body?.events?.some((event) => event.event_type === "ACKED")) {
+      throw new Error("ack_not_ready");
+    }
+    return polled;
+  });
+
+  const inbox = await waitFor(async () => {
+    const polled = await jsonRequest(buyer, "/controller/inbox/pull", {
+      method: "POST",
+      body: {}
+    });
+    if (polled.status !== 200 || polled.body?.accepted?.length !== 1) {
+      throw new Error("buyer_inbox_not_ready");
+    }
+    return polled;
+  });
 
   const final = await jsonRequest(buyer, `/controller/requests/${requestId}`);
   if (final.status !== 200 || final.body?.status !== "SUCCEEDED") {
     throw new Error(`unexpected_final_status: ${final.status} ${final.body?.status || "n/a"}`);
   }
 
-  console.log(`[compose-smoke] success request_id=${requestId} final_status=${final.body.status}`);
+  console.log(
+    `[compose-smoke] success request_id=${requestId} acked=${events.body.events.some((event) => event.event_type === "ACKED")} accepted=${inbox.body.accepted.length} final_status=${final.body.status}`
+  );
 }
 
 function runPostgresCrudCheck(composeArgs) {

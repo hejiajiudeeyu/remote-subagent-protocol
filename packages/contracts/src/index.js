@@ -5,8 +5,7 @@ export const REQUEST_STATUS = {
   SUCCEEDED: 'SUCCEEDED',
   FAILED: 'FAILED',
   UNVERIFIED: 'UNVERIFIED',
-  TIMED_OUT: 'TIMED_OUT',
-  DISPUTED: 'DISPUTED'
+  TIMED_OUT: 'TIMED_OUT'
 };
 
 export const ERROR_DOMAIN = {
@@ -18,3 +17,25 @@ export const ERROR_DOMAIN = {
   TEMPLATE: 'TEMPLATE',
   PLATFORM: 'PLATFORM'
 };
+
+export function canonicalizeResultPackageForSignature(result = {}) {
+  const canonical = {};
+
+  for (const key of [
+    'request_id',
+    'result_version',
+    'seller_id',
+    'subagent_id',
+    'status',
+    'output',
+    'error',
+    'timing',
+    'usage'
+  ]) {
+    if (key in result) {
+      canonical[key] = result[key];
+    }
+  }
+
+  return canonical;
+}

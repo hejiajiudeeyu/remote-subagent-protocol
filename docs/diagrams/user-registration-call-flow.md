@@ -3,8 +3,8 @@
 ## 关键澄清
 
 - 主体模型：注册后默认获得 `buyer` 身份。
-- `seller` 不是独立初始身份；只有当该用户提交的 seller agent 审核通过后才激活 `seller` 能力。
-- 接入模式：`identity_onboarding_mode=register_buyer_default_then_activate_seller_on_agent_approval`。
+- `seller` 不是独立初始身份；只有当该用户的 remote subagent 完成 onboarding/导入后才激活 `seller` 能力。
+- 接入模式：`identity_onboarding_mode=register_buyer_default_then_activate_seller_on_remote_subagent_onboarding`。
 - 鉴权方式：`api_auth_mode=api_key`。
 - API Key 仅在签发时明文返回一次；平台仅保存摘要。
 - API Key 与 `user_id` 绑定，按 `role_scopes` 控制可调用接口。
@@ -85,7 +85,7 @@ sequenceDiagram
 ## 最小状态机（建议）
 
 - 用户状态：`PENDING -> ACTIVE | REJECTED`
-- 角色状态：`BUYER_ACTIVE`（默认）; `SELLER_ACTIVE`（由 seller agent 审核通过后激活）
+- 角色状态：`BUYER_ACTIVE`（默认）; `SELLER_ACTIVE`（由 remote subagent onboarding/导入后激活）
 - Key 状态：`ISSUED -> ACTIVE -> ROTATING -> REVOKED`
 
 ## 失败分支最小处置

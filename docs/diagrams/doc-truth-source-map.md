@@ -16,16 +16,16 @@ flowchart LR
     T["Behavior Verification<br/>tests/integration/*<br/>tests/e2e/*"] --> S
     J["Schemas and Templates<br/>docs/templates/subagents/*/*.json"] --> S
     U["Schema Validation<br/>tests/unit/schema-validation.test.js"] --> S
-    A["Architecture Invariants<br/>docs/architecture-mvp.md"] --> S
+    A["Architecture Invariants<br/>../l0/architecture.md"] --> S
 
-    S --> P["Platform API Spec<br/>docs/platform-api-v0.1.md"]
-    S --> I["Integration Playbook<br/>docs/integration-playbook-mvp.md"]
-    S --> D["Frozen Defaults<br/>docs/defaults-v0.1.md"]
+    S --> P["Platform API Spec<br/>../l0/platform-api-v0.1.md"]
+    S --> I["Integration Playbook<br/>../l0/integration-playbook.md"]
+    S --> D["Frozen Defaults<br/>../l0/defaults-v0.1.md"]
 
     P --> R["README / README.zh-CN.md"]
     I --> G["Diagrams<br/>docs/diagrams/*"]
     D --> G
-    P --> K["Checklists / Tracker<br/>docs/checklists/*<br/>docs/development-tracker.md"]
+    P --> K["Checklists / Tracker<br/>docs/checklists/*<br/>../l0/development-tracker.md"]
     I --> K
 ```
 
@@ -33,6 +33,6 @@ flowchart LR
 
 - 接口实际返回什么：以 `apps/*/src/server.js` 和 integration/e2e tests 为准
 - 模板输入输出长什么样：以 `docs/templates/subagents/*/*.json` 和 schema 校验测试为准
-- 系统不变量、模式边界、信任模型：以 `docs/architecture-mvp.md` 为准
-- `docs/platform-api-v0.1.md`、`docs/integration-playbook-mvp.md`、`docs/defaults-v0.1.md` 必须贴合上述真相源
+- 系统不变量、模式边界、信任模型：以 `../l0/architecture.md` 为准
+- `../l0/platform-api-v0.1.md`、`../l0/integration-playbook.md`、`../l0/defaults-v0.1.md` 必须贴合上述真相源
 - `README`、图、checklist、tracker 只能转述，不应扩展协议事实

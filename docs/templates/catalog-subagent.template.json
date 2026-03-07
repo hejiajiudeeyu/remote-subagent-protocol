@@ -11,22 +11,17 @@
   ],
   "version": "1.0.0",
   "status": "active",
-  "delivery_address": "tasks@example.com",
+  "delivery_address": "local://relay/seller_example/seller_namespace.capability.variant.v1",
   "contact": {
     "email": "ops@example.com"
   },
-  "endpoint_hint": "email://seller@example.com",
+  "endpoint_hint": "transport://local-relay/seller_example/seller_namespace.capability.variant.v1",
   "constraints": {
-    "max_budget_cap": 0.1,
     "max_hard_timeout_s": 300
   },
   "sla_hint": {
     "p95_exec_ms": 5000,
     "timeout_rate_7d": 0.05
-  },
-  "pricing_hint": {
-    "currency": "USD",
-    "per_request": 0.02
   },
   "eta_hint": {
     "queue_p50_s": 8,

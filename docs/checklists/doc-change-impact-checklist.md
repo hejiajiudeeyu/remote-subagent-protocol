@@ -4,22 +4,22 @@
 
 ## A. 必改（规范主干）
 
-- [ ] `docs/architecture-mvp.md`
-- [ ] `docs/platform-api-v0.1.md`
-- [ ] `docs/integration-playbook-mvp.md`
-- [ ] `docs/defaults-v0.1.md`（若涉及默认参数）
+- [ ] `../l0/architecture.md`
+- [ ] `../l0/platform-api-v0.1.md`
+- [ ] `../l0/integration-playbook.md`
+- [ ] `../l0/defaults-v0.1.md`（若涉及默认参数）
 
 ## B. 必改（图与状态）
 
-- [ ] `docs/diagrams/user-remote-subagent-call-flow.md`
-- [ ] `docs/diagrams/README.md`（若规则/锚点变化）
-- [ ] `docs/diagrams/doc-truth-source-map.md`（若真相源/衍生物层次变化）
+- [ ] `../diagrams/user-remote-subagent-call-flow.md`
+- [ ] `../diagrams/README.md`（若规则/锚点变化）
+- [ ] `../diagrams/doc-truth-source-map.md`（若真相源/衍生物层次变化）
 
 ## C. 建议同步
 
-- [ ] `docs/development-tracker.md`（新增待实现项）
-- [ ] `README.md` / `README.zh-CN.md`（外部说明口径）
-- [ ] `docs/checklists/subagent-admission-checklist.md`（准入门槛）
+- [ ] `../l0/development-tracker.md`（新增待实现项）
+- [ ] `../../README.md` / `../../README.zh-CN.md`（外部说明口径）
+- [ ] `subagent-admission-checklist.md`（准入门槛）
 
 ## D. 一致性检查
 

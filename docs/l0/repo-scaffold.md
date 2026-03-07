@@ -58,23 +58,23 @@
 - `L2 = L0 + packages/transports/relay-lan`
 - `L3 = L0 + packages/transports/email`
 
-建议通过统一配置切换：
+后续若补 transport mode 装配，建议通过统一配置切换，例如：
 
 - `TRANSPORT_MODE=local|relay_local|relay_lan|mcp_email`
 
-controller 内部只读取 mode 并装配 adapter，不在业务逻辑中扩散 `if mode === ...` 分支。
+但当前仓库运行时尚未接入该变量，因此它不应出现在 `.env.example` 中，也不应被当作现有可切换能力。
 
 ## 4.2 docs 目录职责（现有结构评估）
 
 当前 `docs/` 的大类划分基本合理，建议保持以下职责边界：
 
-- `docs/architecture-mvp.md`
+- `architecture.md`
   - 顶层架构、模式边界、协议原则、核心不变量
-- `docs/platform-api-v0.1.md`
+- `platform-api-v0.1.md`
   - 外部控制面 API 契约
-- `docs/defaults-v0.1.md`
+- `defaults-v0.1.md`
   - 冻结参数与实现约束
-- `docs/integration-playbook-mvp.md`
+- `integration-playbook.md`
   - Buyer / Seller / Platform 的集成步骤
 - `docs/diagrams/`
   - 时序图、状态图、RBAC 图
@@ -85,21 +85,42 @@ controller 内部只读取 mode 并装配 adapter，不在业务逻辑中扩散 
 
 当前主要缺口不在存储结构本身，而在“transport / mode 演进文档”的显式归位。建议后续如新增独立文档，优先放在：
 
-- `docs/architecture-mvp.md`：写原则与边界
-- `docs/repo-scaffold-mvp.md`：写代码布局与装配关系
+- `architecture.md`：写原则与边界
+- `repo-scaffold.md`：写代码布局与装配关系
 
 不建议新建过多零散 mode 文档，否则很快会与主架构文档重复。
 
 ## 5. 配置约定
 
-当前不提供 `.env.example`，运行时通过环境变量覆盖：
+当前仓库根目录提供 `.env.example`，只列出当前代码真实读取的变量：
 
+- `TOKEN_TTL_SECONDS`
+- `BOOTSTRAP_SELLER_ID`
+- `BOOTSTRAP_SUBAGENT_ID`
+- `BOOTSTRAP_DELIVERY_ADDRESS`
+- `BOOTSTRAP_SELLER_API_KEY`
+- `BOOTSTRAP_SELLER_PUBLIC_KEY_PEM`
+- `BOOTSTRAP_SELLER_PRIVATE_KEY_PEM`
+- `ACK_DEADLINE_S`
+- `PLATFORM_API_BASE_URL`
+- `PLATFORM_API_KEY`
+- `DATABASE_URL`
+- `SQLITE_DATABASE_PATH`
 - `TIMEOUT_CONFIRMATION_MODE`
 - `HARD_TIMEOUT_AUTO_FINALIZE`
 - `BUYER_CONTROLLER_POLL_INTERVAL_ACTIVE_S`
 - `BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S`
+- `PORT`
+- `SERVICE_NAME`
+- `SELLER_ID`
+- `SUBAGENT_IDS`
+- `SELLER_SIGNING_PUBLIC_KEY_PEM`
+- `SELLER_SIGNING_PRIVATE_KEY_PEM`
+- `SELLER_MAX_HARD_TIMEOUT_S`
+- `SELLER_ALLOWED_TASK_TYPES`
+- `SELLER_HEARTBEAT_INTERVAL_MS`
 
-默认值参考 `docs/defaults-v0.1.md`。
+默认值参考 `defaults-v0.1.md`。
 
 ## 6. 测试入口（TUI + Web UI）
 

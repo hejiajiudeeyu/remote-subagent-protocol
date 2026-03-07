@@ -4,7 +4,7 @@
   "created_at": "2026-03-02T11:20:00Z",
   "buyer": {
     "buyer_id": "buyer_acme",
-    "reply_to": "buyer+mvp@croc.tavern"
+    "return_route_hint": "local://buyer-agent/inbox/default"
   },
   "seller": {
     "seller_id": "seller_foxlab",
@@ -25,7 +25,6 @@
     }
   },
   "constraints": {
-    "budget_cap": 0.05,
     "soft_timeout_s": 90,
     "hard_timeout_s": 300
   },
