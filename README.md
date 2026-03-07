@@ -13,6 +13,8 @@ English | [中文](README.zh-CN.md)
 
 `Remote` refers to the execution and trust boundary, not necessarily cross-network deployment. A single-host `L0 local transport` setup still models remote execution semantics if the buyer and seller remain separate protocol actors.
 
+The protocol is motivated by a common gap in current agent systems: once a task needs external tools, private infrastructure, domain-specific workflows, or human-maintained runtimes, integration usually falls back to ad hoc APIs, prompt conventions, and product-specific glue code. That makes remote capability reuse hard to standardize, hard to verify, and hard to port across host agents. `Remote Subagent Protocol` addresses this by defining a transport-neutral, contract-first call path for discovery, authorization, delivery, signed results, and trust accumulation, so a buyer agent can invoke a remote skill as a protocol capability instead of a one-off integration.
+
 This repository is the protocol source of truth and currently includes:
 
 - protocol architecture and control-plane specifications
