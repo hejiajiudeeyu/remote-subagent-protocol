@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { canonicalizeResultPackageForSignature } from "../../contracts/src/index.js";
+import { canonicalizeResultPackageForSignature } from "@croc/contracts";
 
 export const BUYER_TERMINAL_STATUSES = Object.freeze(["SUCCEEDED", "FAILED", "UNVERIFIED", "TIMED_OUT"]);
 export const BUYER_ACTIVE_STATUSES = Object.freeze(["CREATED", "SENT", "ACKED"]);
@@ -42,6 +42,10 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
+function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
+  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+}
+
 async function requestJson(baseUrl, pathname, { method = "GET", headers = {}, body } = {}) {
   const response = await fetch(new URL(pathname, baseUrl), {
     method,
@@ -67,16 +71,13 @@ function createUpstreamError(code, response) {
   return error;
 }
 
-function sendUpstreamError(res, error, fallbackError) {
+function sendUpstreamError(res, error, fallbackCode, fallbackMessage = "upstream service error") {
   if (error?.response) {
-    sendJson(res, error.response.status, error.response.body || { error: fallbackError });
+    sendJson(res, error.response.status, error.response.body || { error: { code: fallbackCode, message: fallbackMessage, retryable: true } });
     return;
   }
 
-  sendJson(res, 502, {
-    error: fallbackError,
-    message: error instanceof Error ? error.message : "unknown_error"
-  });
+  sendError(res, 502, fallbackCode, error instanceof Error ? error.message : fallbackMessage, { retryable: true });
 }
 
 export function loadBuyerConfig() {
@@ -130,6 +131,22 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
   }
 
   return {
+    async registerBuyer({ contactEmail, contact_email, email } = {}) {
+      const response = await requestJson(baseUrl, "/v1/users/register", {
+        method: "POST",
+        body: {
+          ...(contactEmail || contact_email ? { contact_email: contactEmail || contact_email } : {}),
+          ...(email ? { email } : {})
+        }
+      });
+
+      if (response.status !== 201) {
+        throw createUpstreamError("BUYER_PLATFORM_REGISTER_FAILED", response);
+      }
+
+      return response.body;
+    },
+
     async listCatalogSubagents(filters = {}) {
       const params = new URLSearchParams();
       if (filters.status) {
@@ -137,6 +154,15 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
       }
       if (filters.availability_status) {
         params.set("availability_status", filters.availability_status);
+      }
+      if (filters.task_type) {
+        params.set("task_type", filters.task_type);
+      }
+      if (filters.capability) {
+        params.set("capability", filters.capability);
+      }
+      if (filters.tag) {
+        params.set("tag", filters.tag);
       }
 
       const pathname = `/v1/catalog/subagents${params.size > 0 ? `?${params.toString()}` : ""}`;
@@ -159,6 +185,20 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
         ...response.body,
         items
       };
+    },
+
+    async registerSeller(body = {}) {
+      const response = await requestJson(baseUrl, "/v1/sellers/register", {
+        method: "POST",
+        headers: authHeaders(true),
+        body
+      });
+
+      if (response.status !== 201) {
+        throw createUpstreamError("BUYER_PLATFORM_SELLER_REGISTER_FAILED", response);
+      }
+
+      return response.body;
     },
 
     async issueTaskToken({ requestId, sellerId, subagentId }) {
@@ -469,6 +509,151 @@ async function persistBuyerState(onStateChanged, state) {
   }
 }
 
+function isBuyerRequestActive(request) {
+  return ACTIVE_STATUS_SET.has(request.status);
+}
+
+async function pollBuyerInbox(
+  state,
+  transport,
+  platformClientResolver,
+  onStateChanged,
+  receiver = "buyer-controller"
+) {
+  if (!transport) {
+    return { accepted: [], mutated: false };
+  }
+
+  const polled = await transport.poll({
+    limit: 10,
+    receiver
+  });
+  const accepted = [];
+  let mutated = false;
+
+  for (const envelope of polled.items) {
+    const resultPackage = envelope.result_package || envelope.payload?.result_package || envelope.payload;
+    if (!resultPackage?.request_id) {
+      continue;
+    }
+
+    const request = state.requests.get(resultPackage.request_id);
+    if (!request) {
+      continue;
+    }
+    const platformClient = typeof platformClientResolver === "function" ? platformClientResolver(request) : null;
+
+    if (!TERMINAL_STATUS_SET.has(request.status)) {
+      const transition = applyResultPackage(request, resultPackage);
+      if (transition?.eventType) {
+        await reportBuyerMetric(platformClient, request, transition.eventType, { code: transition.code });
+      }
+      mutated = true;
+    }
+
+    await transport.ack(envelope.message_id, { receiver });
+    accepted.push({ message_id: envelope.message_id, request_id: resultPackage.request_id });
+  }
+
+  if (mutated) {
+    await persistBuyerState(onStateChanged, state);
+  }
+
+  return { accepted, mutated };
+}
+
+async function syncBuyerActiveRequests(state, config, platformClientFactory, onStateChanged) {
+  let mutated = false;
+
+  for (const request of state.requests.values()) {
+    const platformClient = platformClientFactory(request);
+    if (platformClient && isBuyerRequestActive(request)) {
+      try {
+        const synced = await syncBuyerRequestEvents(request, platformClient);
+        if (synced.acked) {
+          await reportBuyerMetric(platformClient, request, "buyer.request.acked");
+        }
+        mutated = true;
+      } catch {
+        // ignore background sync failures; foreground APIs still expose explicit sync
+      }
+    }
+
+    const transition = await evaluateTimeoutsWithMetrics(request, config, platformClient);
+    mutated ||= Boolean(transition);
+  }
+
+  if (mutated) {
+    await persistBuyerState(onStateChanged, state);
+  }
+
+  return { mutated };
+}
+
+export function startBuyerBackgroundLoops({
+  state,
+  config = loadBuyerConfig(),
+  transport = null,
+  receiver = "buyer-controller",
+  inboxPollIntervalMs = 1000,
+  eventsSyncIntervalMs = 1000,
+      platformClientFactory = () => null,
+  onStateChanged = null,
+  logger = console
+} = {}) {
+  let stopped = false;
+  let inboxRunning = false;
+  let syncRunning = false;
+
+  async function runInboxPoll() {
+    if (stopped || inboxRunning || !transport) {
+      return;
+    }
+    inboxRunning = true;
+    try {
+      await pollBuyerInbox(state, transport, platformClientFactory, onStateChanged, receiver);
+    } catch (error) {
+      logger?.warn?.(`[buyer-background] inbox poll failed: ${error instanceof Error ? error.message : "unknown_error"}`);
+    } finally {
+      inboxRunning = false;
+    }
+  }
+
+  async function runEventSync() {
+    if (stopped || syncRunning) {
+      return;
+    }
+    syncRunning = true;
+    try {
+      await syncBuyerActiveRequests(state, config, platformClientFactory, onStateChanged);
+    } catch (error) {
+      logger?.warn?.(`[buyer-background] request sync failed: ${error instanceof Error ? error.message : "unknown_error"}`);
+    } finally {
+      syncRunning = false;
+    }
+  }
+
+  void runInboxPoll();
+  void runEventSync();
+
+  const inboxTimer = transport
+    ? setInterval(() => {
+        void runInboxPoll();
+      }, inboxPollIntervalMs)
+    : null;
+  const syncTimer = setInterval(() => {
+    void runEventSync();
+  }, eventsSyncIntervalMs);
+
+  return () => {
+    stopped = true;
+    if (inboxTimer) {
+      clearInterval(inboxTimer);
+    }
+    clearInterval(syncTimer);
+  };
+}
+
 export async function prepareBuyerRequest(request, platformClient, options = {}) {
   const sellerId = options.seller_id || options.sellerId || request.seller_id;
   const subagentId = options.subagent_id || options.subagentId || request.subagent_id;
@@ -618,27 +803,40 @@ export function createBuyerControllerServer({
   config = loadBuyerConfig(),
   transport = null,
   platform = null,
+  background = {},
   onStateChanged = null
 } = {}) {
   const defaultPlatformClient = platform?.baseUrl ? createBuyerPlatformClient(platform) : null;
+  const defaultBackgroundPlatformClient = platform?.baseUrl && platform?.apiKey ? createBuyerPlatformClient(platform) : null;
+  const requestPlatformAuth = new Map();
 
-  function resolvePlatformClient(req) {
+  function resolvePlatformConfig(req) {
     if (!platform?.baseUrl) {
       return null;
     }
 
-    const headerApiKey = req.headers["x-platform-api-key"];
+    const headerApiKey = req?.headers?.["x-platform-api-key"];
     if (typeof headerApiKey === "string" && headerApiKey.trim()) {
-      return createBuyerPlatformClient({
+      return {
         baseUrl: platform.baseUrl,
         apiKey: headerApiKey.trim()
-      });
+      };
     }
 
-    return defaultPlatformClient;
+    return platform;
   }
 
-  return http.createServer(async (req, res) => {
+  function resolvePlatformClient(req) {
+    const resolved = resolvePlatformConfig(req);
+    if (!resolved?.baseUrl) {
+      return null;
+    }
+    if (resolved === platform && defaultPlatformClient) {
+      return defaultPlatformClient;
+    }
+    return createBuyerPlatformClient(resolved);
+  }
+  const server = http.createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", "http://localhost");
     const pathname = url.pathname;
@@ -670,7 +868,11 @@ export function createBuyerControllerServer({
           service: serviceName,
           status: "running",
           config,
-          platform: platformClient ? { configured: true, base_url: platform.baseUrl } : { configured: false }
+          platform: platformClient ? { configured: true, base_url: platform.baseUrl } : { configured: false },
+          local_defaults: {
+            buyer_contact_email: process.env.BUYER_CONTACT_EMAIL || null,
+            platform_api_key_configured: Boolean(platform?.apiKey)
+          }
         });
         return;
       }
@@ -678,7 +880,7 @@ export function createBuyerControllerServer({
       if (method === "GET" && pathname === "/controller/catalog/subagents") {
         const platformClient = resolvePlatformClient(req);
         if (!platformClient) {
-          sendJson(res, 409, { error: "PLATFORM_NOT_CONFIGURED" });
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
           return;
         }
 
@@ -686,12 +888,49 @@ export function createBuyerControllerServer({
           const catalog = await platformClient.listCatalogSubagents({
             status: url.searchParams.get("status") || undefined,
             availability_status: url.searchParams.get("availability_status") || undefined,
+            task_type: url.searchParams.get("task_type") || undefined,
+            capability: url.searchParams.get("capability") || undefined,
+            tag: url.searchParams.get("tag") || undefined,
             seller_id: url.searchParams.get("seller_id") || undefined,
             subagent_id: url.searchParams.get("subagent_id") || undefined
           });
           sendJson(res, 200, catalog);
         } catch (error) {
-          sendUpstreamError(res, error, "BUYER_PLATFORM_CATALOG_FAILED");
+          sendUpstreamError(res, error, "BUYER_PLATFORM_CATALOG_FAILED", "catalog query failed");
+        }
+        return;
+      }
+
+      if (method === "POST" && pathname === "/controller/register") {
+        const platformClient = resolvePlatformClient(req);
+        if (!platformClient) {
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
+          return;
+        }
+
+        try {
+          const body = await parseJsonBody(req);
+          const registered = await platformClient.registerBuyer(body);
+          sendJson(res, 201, registered);
+        } catch (error) {
+          sendUpstreamError(res, error, "BUYER_PLATFORM_REGISTER_FAILED", "platform registration failed");
+        }
+        return;
+      }
+
+      if (method === "POST" && pathname === "/controller/seller/register") {
+        const platformClient = resolvePlatformClient(req);
+        if (!platformClient) {
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
+          return;
+        }
+
+        try {
+          const body = await parseJsonBody(req);
+          const registered = await platformClient.registerSeller(body);
+          sendJson(res, 201, registered);
+        } catch (error) {
+          sendUpstreamError(res, error, "BUYER_PLATFORM_SELLER_REGISTER_FAILED", "seller registration failed");
         }
         return;
       }
@@ -725,7 +964,7 @@ export function createBuyerControllerServer({
         const platformClient = resolvePlatformClient(req);
         const request = state.requests.get(requestMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
         const transition = await evaluateTimeoutsWithMetrics(request, config, platformClient);
@@ -736,35 +975,115 @@ export function createBuyerControllerServer({
         return;
       }
 
+      const requestResultMatch = pathname.match(/^\/controller\/requests\/([^/]+)\/result$/);
+      if (method === "GET" && requestResultMatch) {
+        const request = state.requests.get(requestResultMatch[1]);
+        if (!request) {
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
+          return;
+        }
+        if (!TERMINAL_STATUS_SET.has(request.status) || !request.result_package) {
+          sendJson(res, 200, { available: false, status: request.status, result_package: null });
+          return;
+        }
+        sendJson(res, 200, {
+          available: true,
+          status: request.status,
+          result_package: request.result_package
+        });
+        return;
+      }
+
       const prepareMatch = pathname.match(/^\/controller\/requests\/([^/]+)\/prepare$/);
       if (method === "POST" && prepareMatch) {
         const platformClient = resolvePlatformClient(req);
         if (!platformClient) {
-          sendJson(res, 409, { error: "PLATFORM_NOT_CONFIGURED" });
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
           return;
         }
 
         const request = state.requests.get(prepareMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
         try {
           const body = await parseJsonBody(req);
+          const platformConfig = resolvePlatformConfig(req);
+          if (platformConfig?.apiKey) {
+            requestPlatformAuth.set(request.request_id, platformConfig);
+          }
           const prepared = await prepareBuyerRequest(request, platformClient, body);
           await persistBuyerState(onStateChanged, state);
           sendJson(res, 200, prepared);
         } catch (error) {
           if (error instanceof Error && error.message === "buyer_prepare_requires_seller_and_subagent") {
-            sendJson(res, 400, { error: "CONTRACT_INVALID_PREPARE_REQUEST" });
+            sendError(res, 400, "CONTRACT_INVALID_PREPARE_REQUEST", "seller_id and subagent_id are required");
             return;
           }
           if (error instanceof Error && error.message === "buyer_signer_binding_mismatch") {
-            sendJson(res, 409, { error: "SIGNER_BINDING_MISMATCH" });
+            sendError(res, 409, "SIGNER_BINDING_MISMATCH", "expected signer public key does not match catalog");
             return;
           }
-          sendUpstreamError(res, error, "BUYER_PLATFORM_PREPARE_FAILED");
+          sendUpstreamError(res, error, "BUYER_PLATFORM_PREPARE_FAILED", "request preparation failed");
+        }
+        return;
+      }
+
+      if (method === "POST" && pathname === "/controller/remote-requests") {
+        const platformClient = resolvePlatformClient(req);
+        if (!platformClient) {
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
+          return;
+        }
+        if (!transport) {
+          sendError(res, 409, "TRANSPORT_NOT_CONFIGURED", "transport adapter is not configured");
+          return;
+        }
+
+        try {
+          const body = await parseJsonBody(req);
+          const request = createRequestRecord(config, body);
+          state.requests.set(request.request_id, request);
+
+          const platformConfig = resolvePlatformConfig(req);
+          if (platformConfig?.apiKey) {
+            requestPlatformAuth.set(request.request_id, platformConfig);
+          }
+
+          const prepared = await prepareBuyerRequest(request, platformClient, body);
+          const contract = createTaskContractDraft(request, body);
+          const envelope = buildDispatchEnvelope(request, {
+            ...body,
+            task_token: prepared.task_token
+          });
+
+          await transport.send(envelope);
+          if (!TERMINAL_STATUS_SET.has(request.status)) {
+            setSentState(request);
+          }
+          await reportBuyerMetric(platformClient, request, "buyer.request.dispatched");
+          await persistBuyerState(onStateChanged, state);
+
+          sendJson(res, 201, {
+            request_id: request.request_id,
+            request,
+            task_token: prepared.task_token,
+            delivery_meta: prepared.delivery_meta,
+            contract,
+            envelope
+          });
+        } catch (error) {
+          if (error instanceof Error && error.message === "buyer_prepare_requires_seller_and_subagent") {
+            sendError(res, 400, "CONTRACT_INVALID_REMOTE_REQUEST", "seller_id and subagent_id are required");
+            return;
+          }
+          if (error instanceof Error && error.message === "buyer_signer_binding_mismatch") {
+            sendError(res, 409, "SIGNER_BINDING_MISMATCH", "expected signer public key does not match catalog");
+            return;
+          }
+          sendUpstreamError(res, error, "BUYER_REMOTE_REQUEST_FAILED", "remote request dispatch failed");
         }
         return;
       }
@@ -773,7 +1092,7 @@ export function createBuyerControllerServer({
       if (method === "POST" && contractMatch) {
         const request = state.requests.get(contractMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
@@ -788,7 +1107,7 @@ export function createBuyerControllerServer({
       if (method === "POST" && markSentMatch) {
         const request = state.requests.get(markSentMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
@@ -806,12 +1125,12 @@ export function createBuyerControllerServer({
         const platformClient = resolvePlatformClient(req);
         const request = state.requests.get(dispatchMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
         if (!transport) {
-          sendJson(res, 409, { error: "TRANSPORT_NOT_CONFIGURED" });
+          sendError(res, 409, "TRANSPORT_NOT_CONFIGURED", "transport adapter is not configured");
           return;
         }
 
@@ -834,13 +1153,13 @@ export function createBuyerControllerServer({
       if (method === "POST" && syncEventsMatch) {
         const platformClient = resolvePlatformClient(req);
         if (!platformClient) {
-          sendJson(res, 409, { error: "PLATFORM_NOT_CONFIGURED" });
+          sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform client is not configured");
           return;
         }
 
         const request = state.requests.get(syncEventsMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
@@ -852,7 +1171,7 @@ export function createBuyerControllerServer({
           await persistBuyerState(onStateChanged, state);
           sendJson(res, 200, synced);
         } catch (error) {
-          sendUpstreamError(res, error, "BUYER_PLATFORM_EVENTS_FAILED");
+          sendUpstreamError(res, error, "BUYER_PLATFORM_EVENTS_FAILED", "event sync failed");
         }
         return;
       }
@@ -862,7 +1181,7 @@ export function createBuyerControllerServer({
         const platformClient = resolvePlatformClient(req);
         const request = state.requests.get(ackMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
@@ -879,17 +1198,16 @@ export function createBuyerControllerServer({
         return;
       }
 
-      const resultMatch = pathname.match(/^\/controller\/requests\/([^/]+)\/result$/);
-      if (method === "POST" && resultMatch) {
+      if (method === "POST" && requestResultMatch) {
         const platformClient = resolvePlatformClient(req);
-        const request = state.requests.get(resultMatch[1]);
+        const request = state.requests.get(requestResultMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
         if (TERMINAL_STATUS_SET.has(request.status)) {
-          sendJson(res, 409, { error: "REQUEST_ALREADY_TERMINAL", status: request.status });
+          sendError(res, 409, "REQUEST_ALREADY_TERMINAL", "request has already reached a terminal state", { status: request.status });
           return;
         }
 
@@ -904,49 +1222,21 @@ export function createBuyerControllerServer({
       }
 
       if (method === "POST" && pathname === "/controller/inbox/pull") {
-        const platformClient = resolvePlatformClient(req);
         if (!transport) {
-          sendJson(res, 409, { error: "TRANSPORT_NOT_CONFIGURED" });
+          sendError(res, 409, "TRANSPORT_NOT_CONFIGURED", "transport adapter is not configured");
           return;
         }
 
         const body = await parseJsonBody(req);
-        const polled = await transport.poll({
-          limit: Number(body.limit || 10),
-          receiver: body.receiver || "buyer-controller"
-        });
-        const accepted = [];
-        let mutated = false;
-
-        for (const envelope of polled.items) {
-          const resultPackage = envelope.result_package || envelope.payload?.result_package || envelope.payload;
-          if (!resultPackage?.request_id) {
-            continue;
-          }
-
-          const request = state.requests.get(resultPackage.request_id);
-          if (!request) {
-            continue;
-          }
-
-          if (!TERMINAL_STATUS_SET.has(request.status)) {
-            const transition = applyResultPackage(request, resultPackage);
-            if (transition?.eventType) {
-              await reportBuyerMetric(platformClient, request, transition.eventType, { code: transition.code });
-            }
-            mutated = true;
-          }
-
-          await transport.ack(envelope.message_id, {
-            receiver: body.receiver || "buyer-controller"
-          });
-          accepted.push({ message_id: envelope.message_id, request_id: resultPackage.request_id });
-        }
-
-        if (mutated) {
-          await persistBuyerState(onStateChanged, state);
-        }
-        sendJson(res, 200, { accepted });
+        const platformConfig = resolvePlatformConfig(req);
+        const result = await pollBuyerInbox(
+          state,
+          transport,
+          () => (platformConfig?.apiKey ? createBuyerPlatformClient(platformConfig) : null),
+          onStateChanged,
+          body.receiver || "buyer-controller"
+        );
+        sendJson(res, 200, { accepted: result.accepted });
         return;
       }
 
@@ -955,7 +1245,7 @@ export function createBuyerControllerServer({
         const platformClient = resolvePlatformClient(req);
         const request = state.requests.get(timeoutMatch[1]);
         if (!request) {
-          sendJson(res, 404, { error: "REQUEST_NOT_FOUND" });
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
           return;
         }
 
@@ -981,17 +1271,43 @@ export function createBuyerControllerServer({
         return;
       }
 
-      sendJson(res, 404, { error: "not_found", path: pathname });
+      sendError(res, 404, "not_found", "no matching route", { path: pathname });
     } catch (error) {
       if (error.message === "invalid_json") {
-        sendJson(res, 400, { error: "CONTRACT_INVALID_JSON" });
+        sendError(res, 400, "CONTRACT_INVALID_JSON", "request body is not valid JSON");
         return;
       }
 
-      sendJson(res, 500, {
-        error: "BUYER_CONTROLLER_INTERNAL_ERROR",
-        message: error instanceof Error ? error.message : "unknown_error"
-      });
+      sendError(res, 500, "BUYER_CONTROLLER_INTERNAL_ERROR", error instanceof Error ? error.message : "unknown_error", { retryable: true });
     }
   });
+
+  const backgroundEnabled = background.enabled === true;
+  let stopBackground = () => {};
+  if (backgroundEnabled) {
+    stopBackground = startBuyerBackgroundLoops({
+      state,
+      config,
+      transport,
+      receiver: background.receiver || "buyer-controller",
+      inboxPollIntervalMs: Number(background.inboxPollIntervalMs || 250),
+      eventsSyncIntervalMs: Number(background.eventsSyncIntervalMs || 250),
+      platformClientFactory: (request) => {
+        const auth = requestPlatformAuth.get(request.request_id);
+        if (auth?.baseUrl && auth?.apiKey) {
+          return createBuyerPlatformClient(auth);
+        }
+        if (defaultBackgroundPlatformClient) {
+          return defaultBackgroundPlatformClient;
+        }
+        return null;
+      },
+      onStateChanged
+    });
+    server.on("close", () => {
+      stopBackground();
+    });
+  }
+
+  return server;
 }

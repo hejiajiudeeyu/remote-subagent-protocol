@@ -1,0 +1,270 @@
+:root {
+  color-scheme: light;
+  font-family: "IBM Plex Sans", "Avenir Next", "Helvetica Neue", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(255, 180, 120, 0.24), transparent 28%),
+    linear-gradient(180deg, #f5efe4 0%, #efe7da 100%);
+  color: #17211f;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+.shell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 32px 20px 48px;
+}
+
+.hero,
+.card {
+  border: 1px solid rgba(31, 51, 46, 0.12);
+  background: rgba(255, 251, 245, 0.88);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 18px 40px rgba(62, 43, 17, 0.08);
+}
+
+.hero {
+  border-radius: 28px;
+  padding: 32px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #a3582d;
+}
+
+h1,
+h2 {
+  margin: 0 0 10px;
+  font-family: "Space Grotesk", "IBM Plex Sans", sans-serif;
+}
+
+h1 {
+  font-size: clamp(2.4rem, 5vw, 4.8rem);
+  line-height: 0.95;
+}
+
+h2 {
+  font-size: 1.35rem;
+}
+
+.lede,
+.note {
+  margin: 0;
+  max-width: 64ch;
+  color: #45514d;
+}
+
+.hero-note {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pill {
+  padding: 10px 14px;
+  border-radius: 999px;
+  background: #163c34;
+  color: #f7f4ef;
+  font-size: 0.85rem;
+}
+
+.pill.warm {
+  background: #be5e28;
+}
+
+.panel {
+  margin-top: 20px;
+}
+
+.grid {
+  display: grid;
+  gap: 18px;
+}
+
+.grid.two {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.grid.three {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  margin-bottom: 16px;
+}
+
+textarea {
+  width: 100%;
+  min-height: 140px;
+  resize: vertical;
+  border: 1px solid rgba(27, 36, 34, 0.16);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.card {
+  border-radius: 24px;
+  padding: 24px;
+}
+
+.card.wide {
+  padding-bottom: 28px;
+}
+
+.section-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #6f6b5d;
+  margin: 14px 0 8px;
+}
+
+input {
+  width: 100%;
+  border: 1px solid rgba(27, 36, 34, 0.16);
+  border-radius: 14px;
+  padding: 12px 14px;
+  font: inherit;
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+button {
+  border: 0;
+  border-radius: 14px;
+  padding: 12px 16px;
+  font: inherit;
+  font-weight: 700;
+  background: #163c34;
+  color: #f7f4ef;
+  cursor: pointer;
+}
+
+button.ghost {
+  background: #ece3d5;
+  color: #163c34;
+}
+
+.output {
+  min-height: 180px;
+  overflow: auto;
+  margin: 18px 0 0;
+  padding: 16px;
+  border-radius: 18px;
+  background: #1f2423;
+  color: #d9eee4;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.output.compact {
+  min-height: 220px;
+}
+
+.stack {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.item-card {
+  border: 1px solid rgba(27, 36, 34, 0.12);
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.item-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+}
+
+.item-head p,
+.meta {
+  margin: 6px 0 0;
+  color: #5c5b51;
+  font-size: 0.9rem;
+}
+
+.status {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.status.healthy,
+.status.succeeded {
+  background: #d4ece1;
+  color: #1b5d48;
+}
+
+.status.acked {
+  background: #e8e0c8;
+  color: #86611e;
+}
+
+.status.created,
+.status.sent {
+  background: #dde7ee;
+  color: #305367;
+}
+
+.status.failed,
+.status.unverified,
+.status.timed_out,
+.status.disabled {
+  background: #f1ddd8;
+  color: #8a3f2a;
+}
+
+.empty {
+  border: 1px dashed rgba(27, 36, 34, 0.16);
+  border-radius: 18px;
+  padding: 14px 16px;
+  color: #5c5b51;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+@media (max-width: 720px) {
+  .shell {
+    padding: 16px 14px 32px;
+  }
+
+  .hero,
+  .section-head {
+    flex-direction: column;
+  }
+}

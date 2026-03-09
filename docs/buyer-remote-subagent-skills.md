@@ -9,6 +9,7 @@
 2. Buyer 侧如何把协议链路封装成 Agent 可一句话调用的 `remote subagent skill`。
 
 本文档面向 Buyer 侧宿主实现，不面向 Seller 侧运行时。
+本文描述的是 Buyer Controller / skill adapter 的较底层接入面，不是终端用户通过统一 `ops` 客户端使用系统的主路径。
 
 ## 1. 目标结论
 
@@ -47,11 +48,11 @@ Buyer 不应让宿主 Agent 直接学习 `register -> catalog -> prepare -> disp
 
 当前参考实现里，Buyer 最稳妥的接入方式不是让宿主 Agent 直接打 Platform API，而是：
 
-1. 启动 [apps/buyer-controller/src/server.js](/Users/hejiajiudeeyu/Documents/Projects/remote-subagent-protocol/apps/buyer-controller/src/server.js)
+1. 启动 [apps/buyer-controller/src/server.js](../apps/buyer-controller/src/server.js)
 2. 在调用 Buyer Controller 时通过 `x-platform-api-key` 传入 Buyer 的平台 API key
 3. 由 Buyer Controller 代为完成与 Platform 的控制面交互
 
-Buyer Controller 当前已经暴露的关键接口见 [packages/buyer-controller-core/src/index.js](/Users/hejiajiudeeyu/Documents/Projects/remote-subagent-protocol/packages/buyer-controller-core/src/index.js)：
+Buyer Controller 当前已经暴露的关键接口见 [packages/buyer-controller-core/src/index.js](../packages/buyer-controller-core/src/index.js)：
 
 - `GET /controller/catalog/subagents`
 - `POST /controller/requests`

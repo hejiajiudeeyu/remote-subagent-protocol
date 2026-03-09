@@ -23,94 +23,53 @@ describe("e2e: success path", () => {
       run: async () => {
         const requestId = `req_success_${Date.now()}`;
 
-        const registered = await jsonRequest(system.platformUrl, "/v1/users/register", {
+        const registered = await jsonRequest(system.buyerUrl, "/controller/register", {
           method: "POST",
           body: { contact_email: "e2e-success@test.local" }
         });
         expect(registered.status).toBe(201);
 
-        const authHeader = { Authorization: `Bearer ${registered.body.api_key}` };
+        const authHeader = { "X-Platform-Api-Key": registered.body.api_key };
 
-        const catalog = await jsonRequest(system.platformUrl, "/v1/catalog/subagents?status=active");
+        const catalog = await jsonRequest(system.buyerUrl, "/controller/catalog/subagents?status=enabled", {
+          headers: authHeader
+        });
         expect(catalog.status).toBe(200);
         expect(catalog.body.items.length).toBeGreaterThan(0);
 
         const selected = catalog.body.items[0];
 
-        const tokenIssued = await jsonRequest(system.platformUrl, "/v1/tokens/task", {
+        const started = await jsonRequest(system.buyerUrl, "/controller/remote-requests", {
           method: "POST",
           headers: authHeader,
-          body: {
-            request_id: requestId,
-            seller_id: selected.seller_id,
-            subagent_id: selected.subagent_id
-          }
-        });
-        expect(tokenIssued.status).toBe(201);
-
-        await jsonRequest(system.buyerUrl, "/controller/requests", {
-          method: "POST",
           body: {
             request_id: requestId,
             seller_id: selected.seller_id,
             subagent_id: selected.subagent_id,
             expected_signer_public_key_pem: selected.seller_public_key_pem,
+            simulate: "success",
+            delay_ms: 30,
             soft_timeout_s: 5,
             hard_timeout_s: 10
           }
         });
-
-        const deliveryMeta = await jsonRequest(system.platformUrl, `/v1/requests/${requestId}/delivery-meta`, {
-          method: "POST",
-          headers: authHeader,
-          body: {
-            seller_id: selected.seller_id,
-            subagent_id: selected.subagent_id,
-            task_token: tokenIssued.body.task_token
-          }
-        });
-        expect(deliveryMeta.status).toBe(200);
-
-        await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}/dispatch`, {
-          method: "POST",
-          body: {
-            task_token: tokenIssued.body.task_token,
-            to: selected.seller_id,
-            simulate: "success",
-            delay_ms: 30
-          }
-        });
-
-        const pulled = await jsonRequest(system.sellerUrl, "/controller/inbox/pull", {
-          method: "POST",
-          body: {}
-        });
-        expect(pulled.status).toBe(200);
-        expect(pulled.body.accepted.length).toBe(1);
+        expect(started.status).toBe(201);
 
         await waitFor(async () => {
-          const events = await jsonRequest(system.platformUrl, `/v1/requests/${requestId}/events`, {
-            headers: authHeader
-          });
-          if (!events.body.events.some((event) => event.event_type === "ACKED")) {
+          const current = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
+          if (current.body.status !== "ACKED" && current.body.status !== "SUCCEEDED") {
             throw new Error("ack_not_ready");
           }
-          return events;
+          return current;
         });
 
-        const inbox = await waitFor(async () => {
-          const polled = await jsonRequest(system.buyerUrl, "/controller/inbox/pull", {
-            method: "POST",
-            body: {}
-          });
-          if (polled.status !== 200 || polled.body.accepted.length !== 1) {
-            throw new Error("buyer_inbox_not_ready");
+        const final = await waitFor(async () => {
+          const current = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
+          if (current.body.status !== "SUCCEEDED") {
+            throw new Error("result_not_ready");
           }
-          return polled;
+          return current;
         });
-        expect(inbox.body.accepted[0].request_id).toBe(requestId);
-
-        const final = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
         expect(final.body.status).toBe("SUCCEEDED");
       }
     });

@@ -2,18 +2,31 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  createSubagentRouterExecutor,
   createSellerControllerServer,
   createSellerState,
   hydrateSellerState,
   serializeSellerState,
   startSellerHeartbeatLoop
-} from "../../../packages/seller-runtime-core/src/index.js";
-import { createPostgresSnapshotStore } from "../../../packages/postgres-store/src/index.js";
-import { createSqliteSnapshotStore } from "../../../packages/sqlite-store/src/index.js";
+} from "@croc/seller-runtime-core";
+import { createPostgresSnapshotStore } from "@croc/postgres-store";
+import { createSqliteSnapshotStore } from "@croc/sqlite-store";
+import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
+import {
+  buildOpsEnvSearchPaths,
+  getOpsConfigFile,
+  getSellerConfigFile,
+  loadEnvFiles,
+  readJsonFile
+} from "../../../scripts/env-files.mjs";
 
-export * from "../../../packages/seller-runtime-core/src/index.js";
+export * from "@croc/seller-runtime-core";
 
 const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const ROOT_DIR = path.resolve(__dirname, "../../..");
+
+loadEnvFiles(buildOpsEnvSearchPaths(ROOT_DIR, "seller"));
 
 function isDirectRun() {
   if (!process.argv[1]) {
@@ -62,6 +75,43 @@ function loadSellerStateFromEnv() {
   return createSellerState(stateOptions);
 }
 
+function loadSellerConfigFromDisk() {
+  const opsConfig = readJsonFile(getOpsConfigFile(), null);
+  if (opsConfig?.seller) {
+    return {
+      seller_id: opsConfig.seller.seller_id || null,
+      display_name: opsConfig.seller.display_name || null,
+      enabled: opsConfig.seller.enabled !== false,
+      subagents: Array.isArray(opsConfig.seller.subagents) ? opsConfig.seller.subagents : []
+    };
+  }
+  return readJsonFile(getSellerConfigFile(), { seller_id: null, display_name: null, enabled: true, subagents: [] });
+}
+
+function mergeConfigSubagentsIntoState(state, config) {
+  const configuredIds = Array.isArray(config?.subagents)
+    ? config.subagents.map((item) => item?.subagent_id).filter(Boolean)
+    : [];
+  if (configuredIds.length === 0) {
+    return state;
+  }
+  const merged = new Set([...(state.identity.subagent_ids || []), ...configuredIds]);
+  state.identity.subagent_ids = Array.from(merged);
+  if (!state.identity.seller_id && config?.seller_id) {
+    state.identity.seller_id = config.seller_id;
+  }
+  state.subagents = Array.isArray(config?.subagents) ? config.subagents : [];
+  return state;
+}
+
+function createExecutorFromConfig(config) {
+  const subagents = Array.isArray(config?.subagents) ? config.subagents : [];
+  if (subagents.length === 0) {
+    return null;
+  }
+  return createSubagentRouterExecutor(subagents);
+}
+
 function loadPlatformConfigFromEnv() {
   const baseUrl = process.env.PLATFORM_API_BASE_URL || null;
   if (!baseUrl) {
@@ -70,7 +120,7 @@ function loadPlatformConfigFromEnv() {
 
   return {
     baseUrl,
-    apiKey: process.env.PLATFORM_API_KEY || null,
+    apiKey: process.env.SELLER_PLATFORM_API_KEY || process.env.PLATFORM_API_KEY || null,
     sellerId: process.env.SELLER_ID || null
   };
 }
@@ -86,6 +136,18 @@ function loadSellerGuardrailsFromEnv() {
     maxHardTimeoutS: maxHardTimeoutS ? Number(maxHardTimeoutS) : null,
     allowedTaskTypes: allowedTaskTypes.length > 0 ? allowedTaskTypes : null
   };
+}
+
+function loadTransportConfigFromEnv() {
+  const baseUrl = process.env.TRANSPORT_BASE_URL || null;
+  if (!baseUrl) {
+    return null;
+  }
+
+  return createRelayHttpTransportAdapter({
+    baseUrl,
+    receiver: process.env.TRANSPORT_RECEIVER || process.env.SELLER_ID || "seller-controller"
+  });
 }
 
 async function createOptionalPersistence(serviceName) {
@@ -115,39 +177,59 @@ async function createOptionalPersistence(serviceName) {
 if (isDirectRun()) {
   const port = Number(process.env.PORT || 8082);
   const serviceName = process.env.SERVICE_NAME || "seller-controller";
-  const state = loadSellerStateFromEnv();
+  const sellerConfig = loadSellerConfigFromDisk();
+  const state = mergeConfigSubagentsIntoState(loadSellerStateFromEnv(), sellerConfig);
   const platform = loadPlatformConfigFromEnv();
+  const transport = loadTransportConfigFromEnv();
+  const executor = createExecutorFromConfig(sellerConfig);
   const persistence = await createOptionalPersistence(serviceName);
   if (persistence) {
     hydrateSellerState(state, await persistence.loadSnapshot());
   }
-  const server = createSellerControllerServer({
-    serviceName,
-    state,
-    platform,
-    guardrails: loadSellerGuardrailsFromEnv(),
-    onStateChanged: persistence
-      ? async (currentState) => {
-          await persistence.saveSnapshot(serializeSellerState(currentState));
-        }
-      : null
-  });
   let stopHeartbeat = () => {};
+  const persistSnapshot = persistence
+    ? async (currentState) => {
+        await persistence.saveSnapshot(serializeSellerState(currentState));
+      }
+    : null;
 
-  server.listen(port, "0.0.0.0", () => {
-    const heartbeatIntervalMs = Number(process.env.SELLER_HEARTBEAT_INTERVAL_MS || 30000);
+  function restartHeartbeatLoop() {
+    stopHeartbeat();
     if (platform?.baseUrl && platform?.apiKey) {
       stopHeartbeat = startSellerHeartbeatLoop({
         state,
         platform,
-        intervalMs: heartbeatIntervalMs,
-        onStateChanged: persistence
-          ? async (currentState) => {
-              await persistence.saveSnapshot(serializeSellerState(currentState));
-            }
-          : null
+        intervalMs: Number(process.env.SELLER_HEARTBEAT_INTERVAL_MS || 30000),
+        onStateChanged: persistSnapshot
       });
+      return;
     }
+    stopHeartbeat = () => {};
+  }
+
+  const server = createSellerControllerServer({
+    serviceName,
+    state,
+    transport,
+    platform,
+    ...(executor ? { executor } : {}),
+    guardrails: loadSellerGuardrailsFromEnv(),
+    background: {
+      enabled: Boolean(transport),
+      receiver: process.env.TRANSPORT_RECEIVER || state.identity.seller_id,
+      inboxPollIntervalMs: Number(process.env.SELLER_INBOX_POLL_INTERVAL_MS || 250)
+    },
+    onStateChanged: persistSnapshot,
+    onPlatformConfigured: async () => {
+      restartHeartbeatLoop();
+      if (persistSnapshot) {
+        await persistSnapshot(state);
+      }
+    }
+  });
+
+  server.listen(port, "0.0.0.0", () => {
+    restartHeartbeatLoop();
     console.log(`[${serviceName}] listening on ${port}`);
   });
 

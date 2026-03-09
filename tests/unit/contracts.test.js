@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeResultPackageForSignature, ERROR_DOMAIN, REQUEST_STATUS } from "../../packages/contracts/src/index.js";
+import { canonicalizeResultPackageForSignature, ERROR_DOMAIN, REQUEST_STATUS } from "@croc/contracts";
 
 describe("@croc/contracts", () => {
   it("contains MVP request statuses", () => {

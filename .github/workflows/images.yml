@@ -1,0 +1,62 @@
+name: Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      push_images:
+        description: Push built images to GHCR
+        required: false
+        default: "false"
+  push:
+    tags:
+      - "v*"
+  pull_request:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: ${{ github.repository_owner }}
+
+jobs:
+  build-images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: rsp-platform
+            app_path: apps/platform-api
+          - name: rsp-buyer
+            app_path: apps/buyer-controller
+          - name: rsp-seller
+            app_path: apps/seller-controller
+          - name: rsp-relay
+            app_path: apps/transport-relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name != 'pull_request'
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.name }}
+          tags: |
+            type=sha
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.workspace
+          build-args: |
+            APP_PATH=${{ matrix.app_path }}
+          push: ${{ github.event_name != 'pull_request' && (startsWith(github.ref, 'refs/tags/v') || github.event.inputs.push_images == 'true') }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

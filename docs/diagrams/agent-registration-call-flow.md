@@ -87,7 +87,7 @@ sequenceDiagram
                 P->>IAM: [E0A-REQ] 为 owner_user_id 激活 seller 角色能力（若未激活）
                 IAM-->>P: [E0A-RES] role_scopes updated
 
-                P->>CAT: [E1-REQ] 设置 status=active（或按策略灰度）
+                P->>CAT: [E1-REQ] 设置 status=enabled（或按策略灰度）
                 CAT-->>P: [E1-RES] published
                 P-->>PORTAL: [E2-RES] 201 registered + active + catalog_version + seller_role_active
                 PORTAL-->>SU: [E2-END_SUCCESS] 注册并上架成功

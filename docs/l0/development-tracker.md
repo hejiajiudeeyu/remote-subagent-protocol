@@ -38,7 +38,7 @@
 - [x] Buyer Controller 内部请求状态接口骨架（含超时决策接口）
 - [x] Seller Controller 任务队列骨架（priority/FIFO + lease_ttl 基础语义）
 - [x] 测试骨架落地（unit/integration/e2e + mocks + flow report）
-- [x] 测试可视化页面（`site/test-flow-dashboard.html`，支持按 `flow_step_id` 高亮）
+- [x] 测试可视化页面（`site/protocol-playground.html`，支持按 `flow_step_id` 高亮）
 - [x] docker compose 真实进程冒烟联调脚本（`tests/smoke/compose-smoke.mjs`）
 
 说明：当前已具备三端可启动脚手架；并已补齐一版 `L0 local transport` 联调闭环、协议参考控制面最小 RBAC、Buyer 验签信任链修正。
@@ -106,7 +106,7 @@
   - [x] Ed25519 签名生成与验签
   - [x] 状态机迁移逻辑（合法迁移路径与非法迁移拒绝）
   - [x] 流程步骤映射完整性（E2E `flow_step_id` 对齐时序图标签）
-  - [ ] 错误码映射与 retryable 标记
+  - [x] 错误码映射与 retryable 标记
 - **集成测试**：
   - [x] 传输通道替身收发（发送任务 -> 回包轮询 -> request_id 过滤）
   - [x] PostgreSQL CRUD（compose 冒烟脚本内执行最小建表/写入/查询/清理）
@@ -126,7 +126,7 @@
 
 - [x] `vitest` 测试基线（unit/integration/e2e）
 - [x] TUI 反馈（Vitest 默认终端输出）
-- [x] Web UI 反馈（`site/test-flow-dashboard.html`）
+- [x] Web UI 反馈（`site/protocol-playground.html`）
 - [x] 流程步骤映射报告（`tests/reports/latest.json`）
 - [x] 测试 mock 组件（platform/email/clock）
 - [x] `L0 local transport` 真实联调装配（buyer dispatch -> seller pull）

@@ -149,7 +149,9 @@ OpenClaw skill 的典型接入方式是：
 
 ## 6. 桥接层内部如何映射到当前仓库
 
-当前仓库里，OpenClaw bridge 最适合基于 [packages/buyer-controller-core/src/index.js](/Users/hejiajiudeeyu/Documents/Projects/remote-subagent-protocol/packages/buyer-controller-core/src/index.js) 或 [apps/buyer-controller/src/server.js](/Users/hejiajiudeeyu/Documents/Projects/remote-subagent-protocol/apps/buyer-controller/src/server.js) 实现。
+本文这一节描述的是 OpenClaw bridge 对 Buyer Controller 的底层桥接方式，不是终端用户通过统一 `ops` 客户端使用系统的主路径。
+
+当前仓库里，OpenClaw bridge 最适合基于 [packages/buyer-controller-core/src/index.js](../packages/buyer-controller-core/src/index.js) 或 [apps/buyer-controller/src/server.js](../apps/buyer-controller/src/server.js) 实现。
 
 一次 `invoke` 的内部流程建议固定为：
 

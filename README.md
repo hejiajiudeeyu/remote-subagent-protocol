@@ -39,6 +39,10 @@ This repository is protocol-first. Implementation-specific product logic, distri
 - [OpenClaw Adapter Guide](docs/openclaw-adapter.md)
 - [Diagram Index](docs/diagrams/README.md)
 - [Development Tracker](docs/l0/development-tracker.md)
+- [L0 Closeout Checklist](docs/l0/l0-closeout-checklist.md)
+- [Deployment Guide](docs/deployment-guide.md)
+- [Release Process](docs/release-process.md)
+- [Release Compatibility Matrix](docs/releases/compatibility-matrix.md)
 - [Protocol Playground](site/protocol-playground.html)
 
 ## Reference Implementations
@@ -49,12 +53,56 @@ This repository is protocol-first. Implementation-specific product logic, distri
 - [Contracts Package](packages/contracts)
 - [Transport Packages](packages/transports)
 
-## Running The Repo
+## End-User Ops Client
+
+- `npm run ops -- setup` to initialize the unified local ops client under `~/.remote-subagent`
+- `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080` to register a buyer API key
+- `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"` to attach a local seller subagent
+- `npm run ops -- remove-subagent --subagent-id local.echo.v1` to remove a local seller subagent from the machine
+- `npm run ops -- disable-subagent --subagent-id local.echo.v1` to disable a local seller subagent without deleting it
+- `npm run ops -- enable-subagent --subagent-id local.echo.v1` to re-enable a disabled local seller subagent
+- `npm run ops -- submit-review` to submit pending local seller subagents for platform review
+- `npm run ops -- enable-seller` to enable the local seller runtime after setup/review submission
+- `npm run ops -- start` to run the local supervisor, buyer, and relay
+- `npm run ops -- doctor` to run local runtime and adapter checks
+- `npm run ops -- debug-snapshot` to export a local debug snapshot with recent events and log tails
+
+## Repo Development And Test Commands
 
 - `npm run test:unit`
 - `npm run test:integration`
 - `npm run test:e2e`
 - `npm run test:compose-smoke`
+
+## Web Consoles
+
+- `npm run dev:ops-console` for the shared buyer/seller user console
+- `npm run dev:platform-console` for the platform admin console (use `PLATFORM_ADMIN_API_KEY`)
+- `ops-console` now includes a setup wizard, request timeline/result panels, runtime alerts, and local debug snapshot support
+- `platform-console` now includes reviewer guidance, review/audit history summaries, and reviewer note-driven approve/reject/disable actions
+- Seller CLI/runtime architecture: [docs/design/seller-runtime-cli.md](docs/design/seller-runtime-cli.md)
+
+## Deployment Profiles
+
+- End-user buyer/seller install path: `npx @croc/ops setup -> auth register -> add-subagent -> submit-review -> enable-seller -> start`
+- For the full end-user sequence and troubleshooting notes, see [deploy/ops](deploy/ops)
+- End-user local logs are written under `~/.remote-subagent/logs`, and `ops-console` reads them through the supervisor
+- Docker/Compose remains the recommended path for platform, relay, CI, local integration, and advanced standalone deployments
+- `make deploy-platform` for standalone `platform-api` + PostgreSQL
+- `make deploy-ops` for the combined end-user package (buyer by default, seller optional)
+- `make deploy-relay` for shared transport relay
+- `make deploy-buyer` for standalone `buyer-controller`
+- `make deploy-seller` for standalone `seller-controller`
+- `make deploy-all` for single-host local integration
+
+Deployment entrypoints live under:
+
+- [deploy/platform](deploy/platform)
+- [deploy/ops](deploy/ops)
+- [deploy/relay](deploy/relay)
+- [deploy/buyer](deploy/buyer)
+- [deploy/seller](deploy/seller)
+- [deploy/all-in-one](deploy/all-in-one)
 
 ## License
 

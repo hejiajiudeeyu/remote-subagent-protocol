@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "../../apps/platform-api/src/server.js";
+import { createPlatformServer, createPlatformState } from "@croc/platform-api";
 import { closeServer, jsonRequest, listenServer } from "../helpers/http.js";
 
 describe("platform-api integration", () => {
@@ -27,7 +27,7 @@ describe("platform-api integration", () => {
 
     const auth = { Authorization: `Bearer ${register.body.api_key}` };
 
-    const catalog = await jsonRequest(baseUrl, "/v1/catalog/subagents?status=active");
+    const catalog = await jsonRequest(baseUrl, "/v1/catalog/subagents?status=enabled");
     expect(catalog.status).toBe(200);
     expect(catalog.body.items.length).toBeGreaterThan(0);
 
@@ -82,7 +82,7 @@ describe("platform-api integration", () => {
       }
     });
     expect(tokenRes.status).toBe(401);
-    expect(tokenRes.body.error).toBe("AUTH_UNAUTHORIZED");
+    expect(tokenRes.body.error.code).toBe("AUTH_UNAUTHORIZED");
   });
 
   it("updates catalog availability via heartbeat", async () => {
@@ -148,7 +148,7 @@ describe("platform-api integration", () => {
       headers: { Authorization: `Bearer ${buyerTwo.body.api_key}` }
     });
     expect(foreignEvents.status).toBe(403);
-    expect(foreignEvents.body.error).toBe("AUTH_RESOURCE_FORBIDDEN");
+    expect(foreignEvents.body.error.code).toBe("AUTH_RESOURCE_FORBIDDEN");
 
     const foreignDeliveryMeta = await jsonRequest(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
       method: "POST",
@@ -159,7 +159,7 @@ describe("platform-api integration", () => {
       }
     });
     expect(foreignDeliveryMeta.status).toBe(403);
-    expect(foreignDeliveryMeta.body.error).toBe("AUTH_RESOURCE_FORBIDDEN");
+    expect(foreignDeliveryMeta.body.error.code).toBe("AUTH_RESOURCE_FORBIDDEN");
 
     const sellerAuth = {
       Authorization: `Bearer ${state.bootstrap.sellers.find((item) => item.seller_id === seller.seller_id).api_key}`
@@ -227,7 +227,7 @@ describe("platform-api integration", () => {
       });
       expect(introspect.status).toBe(200);
       expect(introspect.body.active).toBe(false);
-      expect(introspect.body.error).toBe("AUTH_TOKEN_EXPIRED");
+      expect(introspect.body.error.code).toBe("AUTH_TOKEN_EXPIRED");
     } finally {
       if (originalTtl === undefined) {
         delete process.env.TOKEN_TTL_SECONDS;
@@ -258,7 +258,286 @@ describe("platform-api integration", () => {
         body: endpoint.body
       });
       expect(response.status, `${endpoint.method} ${endpoint.path}`).toBe(401);
-      expect(response.body.error).toBe("AUTH_UNAUTHORIZED");
+      expect(response.body.error.code).toBe("AUTH_UNAUTHORIZED");
     }
+  });
+
+  it("registers seller identities and filters catalog by capability", async () => {
+    const registered = await jsonRequest(baseUrl, "/v1/sellers/register", {
+      method: "POST",
+      body: {
+        seller_id: "seller_legalworks",
+        subagent_id: "legalworks.contract.extractor.v1",
+        display_name: "LegalWorks Contract Extractor",
+        seller_public_key_pem: state.bootstrap.sellers[0].signing.publicKeyPem,
+        task_types: ["contract_extract"],
+        capabilities: ["contract.extract", "legal.review"],
+        tags: ["legal", "contracts"]
+      }
+    });
+    expect(registered.status).toBe(201);
+    expect(registered.body.api_key).toMatch(/^sk_seller_/);
+
+    expect(registered.body.status).toBe("disabled");
+    expect(registered.body.review_status).toBe("pending");
+
+    const filteredBeforeApproval = await jsonRequest(baseUrl, "/v1/catalog/subagents?capability=contract.extract");
+    expect(filteredBeforeApproval.status).toBe(200);
+    expect(filteredBeforeApproval.body.items).toHaveLength(0);
+
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "pending-seller-buyer@test.local" }
+    });
+    const tokenBeforeApproval = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${buyer.body.api_key}`
+      },
+      body: {
+        request_id: "req_pending_seller_1",
+        seller_id: "seller_legalworks",
+        subagent_id: "legalworks.contract.extractor.v1"
+      }
+    });
+    expect(tokenBeforeApproval.status).toBe(404);
+    expect(tokenBeforeApproval.body.error.code).toBe("CATALOG_SUBAGENT_NOT_FOUND");
+
+    const approved = await jsonRequest(baseUrl, "/v1/admin/subagents/legalworks.contract.extractor.v1/approve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${state.adminApiKey}`
+      },
+      body: {
+        reason: "initial review passed"
+      }
+    });
+    expect(approved.status).toBe(200);
+
+    const filtered = await jsonRequest(baseUrl, "/v1/catalog/subagents?capability=contract.extract");
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.items).toHaveLength(1);
+    expect(filtered.body.items[0]).toMatchObject({
+      seller_id: "seller_legalworks",
+      subagent_id: "legalworks.contract.extractor.v1"
+    });
+
+    const tagged = await jsonRequest(baseUrl, "/v1/catalog/subagents?tag=legal");
+    expect(tagged.status).toBe(200);
+    expect(tagged.body.items.some((item) => item.subagent_id === "legalworks.contract.extractor.v1")).toBe(true);
+  });
+
+  it("allows a buyer to add the seller role on the same user", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "dual-role@test.local" }
+    });
+    expect(buyer.status).toBe(201);
+
+    const registered = await jsonRequest(baseUrl, "/v1/sellers/register", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${buyer.body.api_key}`
+      },
+      body: {
+        seller_id: "seller_dual_role",
+        subagent_id: "dual.role.v1",
+        display_name: "Dual Role Seller",
+        seller_public_key_pem: state.bootstrap.sellers[0].signing.publicKeyPem
+      }
+    });
+    expect(registered.status).toBe(201);
+    expect(registered.body.owner_user_id).toBe(buyer.body.user_id);
+    expect(state.users.get(buyer.body.user_id).roles).toEqual(["buyer", "seller"]);
+    expect(registered.body.review_status).toBe("pending");
+  });
+
+  it("allows an existing seller to append a second subagent", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "multi-subagent@test.local" }
+    });
+
+    const first = await jsonRequest(baseUrl, "/v1/sellers/register", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${buyer.body.api_key}`
+      },
+      body: {
+        seller_id: "seller_multi",
+        subagent_id: "multi.first.v1",
+        display_name: "First Subagent",
+        seller_public_key_pem: state.bootstrap.sellers[0].signing.publicKeyPem
+      }
+    });
+    expect(first.status).toBe(201);
+
+    const second = await jsonRequest(baseUrl, "/v1/sellers/register", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${first.body.api_key}`
+      },
+      body: {
+        seller_id: "seller_multi",
+        subagent_id: "multi.second.v1",
+        display_name: "Second Subagent",
+        seller_public_key_pem: state.bootstrap.sellers[0].signing.publicKeyPem,
+        capabilities: ["text.summarize"]
+      }
+    });
+    expect(second.status).toBe(201);
+    expect(second.body.api_key).toBe(first.body.api_key);
+    expect(state.sellers.get("seller_multi").subagent_ids).toEqual(["multi.first.v1", "multi.second.v1"]);
+    expect(state.apiKeys.get(first.body.api_key).subagent_ids).toEqual(["multi.first.v1", "multi.second.v1"]);
+    expect(second.body.review_status).toBe("pending");
+  });
+
+  it("serves admin seller, subagent, and request views and allows status actions", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "platform-admin@test.local" }
+    });
+    const buyerAuth = {
+      Authorization: `Bearer ${buyer.body.api_key}`
+    };
+    const adminAuth = {
+      Authorization: `Bearer ${state.adminApiKey}`
+    };
+
+    const token = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        request_id: "req_admin_view_1",
+        seller_id: "seller_foxlab",
+        subagent_id: "foxlab.text.classifier.v1"
+      }
+    });
+    expect(token.status).toBe(201);
+
+    const forbidden = await jsonRequest(baseUrl, "/v1/admin/sellers", {
+      headers: buyerAuth
+    });
+    expect(forbidden.status).toBe(403);
+
+    const sellers = await jsonRequest(baseUrl, "/v1/admin/sellers", {
+      headers: adminAuth
+    });
+    expect(sellers.status).toBe(200);
+    expect(sellers.body.items.some((item) => item.seller_id === "seller_foxlab")).toBe(true);
+
+    const subagents = await jsonRequest(baseUrl, "/v1/admin/subagents", {
+      headers: adminAuth
+    });
+    expect(subagents.status).toBe(200);
+    expect(subagents.body.items.some((item) => item.subagent_id === "foxlab.text.classifier.v1")).toBe(true);
+
+    const requests = await jsonRequest(baseUrl, "/v1/admin/requests", {
+      headers: adminAuth
+    });
+    expect(requests.status).toBe(200);
+    expect(requests.body.items.some((item) => item.request_id === "req_admin_view_1")).toBe(true);
+
+    const grant = await jsonRequest(baseUrl, `/v1/admin/users/${buyer.body.user_id}/roles`, {
+      method: "POST",
+      headers: adminAuth,
+      body: {
+        role: "admin"
+      }
+    });
+    expect(grant.status).toBe(200);
+    expect(grant.body.roles).toContain("admin");
+
+    const delegated = await jsonRequest(baseUrl, "/v1/admin/sellers", {
+      headers: buyerAuth
+    });
+    expect(delegated.status).toBe(200);
+
+    const disableSubagent = await jsonRequest(baseUrl, "/v1/admin/subagents/foxlab.text.classifier.v1/disable", {
+      method: "POST",
+      headers: adminAuth,
+      body: { reason: "quality regression" }
+    });
+    expect(disableSubagent.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("disabled");
+
+    const approveSubagent = await jsonRequest(baseUrl, "/v1/admin/subagents/foxlab.text.classifier.v1/approve", {
+      method: "POST",
+      headers: adminAuth
+    });
+    expect(approveSubagent.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("enabled");
+
+    const disableSeller = await jsonRequest(baseUrl, "/v1/admin/sellers/seller_foxlab/disable", {
+      method: "POST",
+      headers: adminAuth,
+      body: { reason: "maintenance window" }
+    });
+    expect(disableSeller.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("disabled");
+
+    const approveSeller = await jsonRequest(baseUrl, "/v1/admin/sellers/seller_foxlab/approve", {
+      method: "POST",
+      headers: adminAuth,
+      body: { reason: "maintenance complete" }
+    });
+    expect(approveSeller.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("enabled");
+
+    const rejectSubagent = await jsonRequest(baseUrl, "/v1/admin/subagents/foxlab.text.classifier.v1/reject", {
+      method: "POST",
+      headers: adminAuth,
+      body: { reason: "schema issues" }
+    });
+    expect(rejectSubagent.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("disabled");
+
+    const reapproveSubagent = await jsonRequest(baseUrl, "/v1/admin/subagents/foxlab.text.classifier.v1/approve", {
+      method: "POST",
+      headers: adminAuth,
+      body: { reason: "schema fixed" }
+    });
+    expect(reapproveSubagent.status).toBe(200);
+    expect(state.catalog.get("foxlab.text.classifier.v1").status).toBe("enabled");
+
+    const audit = await jsonRequest(baseUrl, "/v1/admin/audit-events?limit=10", {
+      headers: adminAuth
+    });
+    expect(audit.status).toBe(200);
+    expect(audit.body.items.some((item) => item.action === "user.role.granted" && item.target_id === buyer.body.user_id)).toBe(true);
+    expect(audit.body.items.some((item) => item.action === "seller.disabled" && item.reason === "maintenance window")).toBe(true);
+    expect(audit.body.items.some((item) => item.action === "subagent.disabled" && item.reason === "quality regression")).toBe(true);
+    expect(audit.body.items.some((item) => item.action === "subagent.rejected" && item.reason === "schema issues")).toBe(true);
+
+    const filteredSellers = await jsonRequest(baseUrl, "/v1/admin/sellers?q=foxlab&limit=1", {
+      headers: adminAuth
+    });
+    expect(filteredSellers.status).toBe(200);
+    expect(filteredSellers.body.items).toHaveLength(1);
+    expect(filteredSellers.body.pagination.total).toBeGreaterThanOrEqual(1);
+
+    const filteredSubagents = await jsonRequest(baseUrl, "/v1/admin/subagents?seller_id=seller_foxlab&status=enabled", {
+      headers: adminAuth
+    });
+    expect(filteredSubagents.status).toBe(200);
+    expect(filteredSubagents.body.items.every((item) => item.seller_id === "seller_foxlab")).toBe(true);
+
+    const filteredRequests = await jsonRequest(baseUrl, "/v1/admin/requests?buyer_id=" + buyer.body.user_id, {
+      headers: adminAuth
+    });
+    expect(filteredRequests.status).toBe(200);
+    expect(filteredRequests.body.items.some((item) => item.request_id === "req_admin_view_1")).toBe(true);
+
+    const filteredAudit = await jsonRequest(baseUrl, "/v1/admin/audit-events?action=seller.disabled", {
+      headers: adminAuth
+    });
+    expect(filteredAudit.status).toBe(200);
+    expect(filteredAudit.body.items.every((item) => item.action === "seller.disabled")).toBe(true);
+
+    const reviews = await jsonRequest(baseUrl, "/v1/admin/reviews?review_status=approved", {
+      headers: adminAuth
+    });
+    expect(reviews.status).toBe(200);
+    expect(reviews.body.items.some((item) => item.target_id === "foxlab.text.classifier.v1")).toBe(true);
   });
 });

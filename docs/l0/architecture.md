@@ -119,16 +119,17 @@
 
 - `send(envelope)`：
   - 输入统一消息封装，至少包含 `message_id`, `request_id`, `thread_hint`, `from`, `to`, `message_type`, `payload`, `created_at`
-  - 返回 `accepted`, `transport_message_id`, `accepted_at`
-- `poll(cursor)`：
+  - 返回发送后的完整 message 对象（含生成的 `message_id` 和 `queued_at`）
+- `poll({ limit, receiver })`：
   - 拉取当前 controller 可见的新消息
-  - 返回 `messages[]`, `next_cursor`
+  - 返回 `{ items }` 数组
 - `ack(message_id)`：
   - 确认某条传输消息已被本地消费，避免重复投递
-- `peek(thread_hint)`（可选）：
+  - 返回 `{ acked: true|false }`
+- `peek({ thread_id })`（可选）：
   - 按线程或 request 维度查询调试视图，便于 playground / debugger / 运维排障
 - `health()`：
-  - 返回 transport 当前健康状态、延迟、积压量、模式元信息
+  - 返回 transport 当前健康状态、队列深度、receiver 标识
 
 统一消息封装建议字段：
 
@@ -397,6 +398,8 @@ docs/templates/subagents/{subagent_id}/
 - `DISPUTED` 属于后续人工复核流程，不纳入 L0 最小闭环。
 
 ## 6.2 请求状态机（Seller 视角）
+
+设计态（完整生命周期）：
 - `RECEIVED`：收件成功，已提取合同
 - `AUTH_CHECKING`：校验 API key/introspect/claims
 - `CONTRACT_CHECKING`：字段、版本、超时、任务类型校验
@@ -407,13 +410,15 @@ docs/templates/subagents/{subagent_id}/
 - `REPLIED`：结果包已按当前 transport 语义回传
 - `DONE`：流程结束（含回放命中）
 
+L0 实现简化为 3 态：`QUEUED` → `RUNNING` → `COMPLETED`。RECEIVED/AUTH_CHECKING/CONTRACT_CHECKING 在入队前同步完成，RESULT_PACKED/REPLIED/DONE 合并为 COMPLETED。
+
 ## 6.3 请求状态机（Platform 视角）
 - `REQUEST_REGISTERED`：买家 request 建立
-- `TOKEN_ISSUED`：task token 已签发
+- `TASK_TOKEN_ISSUED`：task token 已签发
 - `DELIVERY_META_ISSUED`：投递元数据已下发
-- `ACK_RECORDED`：卖家 ACK 已记录
-- `TIMEOUT_RECORDED`：买家超时已记录
-- `CLOSED`：请求闭环结束（成功/失败/超时）
+- `ACKED`：卖家 ACK 已记录
+- `TIMEOUT_RECORDED`：买家超时已记录（后续增强）
+- `CLOSED`：请求闭环结束（后续增强）
 
 ## 6.4 幂等与去重语义
 - 卖家侧以 `request_id` 作为唯一执行键。
@@ -546,7 +551,7 @@ MVP 阶段目录项较少，可用“遍历 + 分类过滤”。
 MVP 明确不实现搜索引擎能力（联想、模糊、语义召回、复杂推荐）。
 
 ### 11.1 MVP 检索模式
-- 模式 A：全量遍历（`status=active`，可按 `availability_status=healthy` 过滤）
+- 模式 A：全量遍历（`status=enabled`，可按 `availability_status=healthy` 过滤）
 - 模式 B：词条分类（`capability/category/task_type`）
 
 ### 11.2 演进目标（后续）

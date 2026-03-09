@@ -12,6 +12,7 @@
 6. [Testing Strategy](testing-strategy.md)
 7. [Data Collection](data-collection.md)
 8. [Development Tracker](development-tracker.md)
-9. [L0 Call Flow](diagrams/l0-call-flow.md)
+9. [L0 Closeout Checklist](l0-closeout-checklist.md)
+10. [L0 Call Flow](diagrams/l0-call-flow.md)
 
 根目录下保留的 `../post-l0-evolution.md`、`docs/remote-subagent-scope.md` 和 `docs/diagrams/*` 主要服务于总体设计、演进路线和跨版本说明，不再作为 `L0` 实现文档入口。

@@ -36,9 +36,9 @@
   - 字段：`status`, `seller_id`, `subagent_id`, `token_exp_at`, `attempt`, `updated_at`
 
 ## 2.2 目录查询与选择
-- 调用：`GET /v1/catalog/subagents?capability=...&status=active`
+- 调用：`GET /v1/catalog/subagents?capability=...&status=enabled`
 - 选择规则建议（MVP）：
-  - `status=active`
+  - `status=enabled`
   - `availability_status=healthy`
   - `template_ref` 可用
   - 若目录提供 `capabilities/supported_task_types`，则应覆盖当前任务
@@ -128,13 +128,12 @@
 
 ## 2.7 买家指标上报
 - 建议上报事件：
-  - `request_sent`
-  - `request_acked`
-  - `request_ack_timeout`
-  - `request_succeeded`
-  - `request_timeout`
-  - `result_signature_invalid`
-  - `result_schema_invalid`
+  - `buyer.request.dispatched`
+  - `buyer.request.acked`
+  - `buyer.request.succeeded`
+  - `buyer.request.timed_out`
+  - `buyer.request.unverified`
+  - `buyer.request.failed`
 - 统一调用：`POST /v1/metrics/events`
 
 ## 2.8 本地参数覆盖
@@ -269,7 +268,7 @@
 - Buyer 缓存 TTL：5 分钟（MVP）。
 - 关键请求前可强制刷新一次目录（避免选到已下线 subagent）。
 - 目录项包含：
-  - `status`（`active|inactive|blocked`）
+  - `status`（`enabled|disabled`）
   - `availability_status`（`healthy|degraded|offline`）
   - `last_heartbeat_at`
   - `version`

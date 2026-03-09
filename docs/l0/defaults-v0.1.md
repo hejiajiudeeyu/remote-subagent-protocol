@@ -23,9 +23,9 @@
 | `hard_timeout_auto_finalize` | `true` | FROZEN | 达到 `hard_timeout_s` 且未明确继续等待时自动终态 `TIMED_OUT` |
 | `buyer_controller_poll_interval_active_s` | `5` | FROZEN | Buyer Agent 轮询 Controller 的活跃期间隔（前 30 秒） |
 | `buyer_controller_poll_interval_backoff_s` | `15` | FROZEN | Buyer Agent 轮询 Controller 的退避间隔（30 秒后） |
-| `max_retry_attempts` | `2` | FROZEN | 最大重试次数（总尝试数=3） |
-| `retry_backoff` | `exponential + jitter` | FROZEN | 重试退避策略 |
-| `delivery_observation_window_s` | `60` | FROZEN | transport 投递观测窗口，用于超时分层计算 |
+| `max_retry_attempts` | `2` | FROZEN | 最大重试次数（总尝试数=3）。规划参数，当前未实现重试逻辑 |
+| `retry_backoff` | `exponential + jitter` | FROZEN | 重试退避策略。规划参数，当前未实现 |
+| `delivery_observation_window_s` | `60` | FROZEN | transport 投递观测窗口，用于超时分层计算。规划参数，当前未实现 |
 
 ## 2) Token 与安全
 
@@ -36,9 +36,9 @@
 | `token_max_ttl_seconds` | `300` | FROZEN | v0.1 当前冻结为单一 TTL |
 | `result_signature_algorithm` | `Ed25519` | FROZEN | 结果包签名算法 |
 | `seller_token_validation_mode` | `online_introspect_required` | FROZEN | 卖家校验 token 统一走 `POST /v1/tokens/introspect` |
-| `idempotency_window_hours` | `24` | FROZEN | `request_id` 去重窗口 |
+| `idempotency_window_hours` | `24` | FROZEN | `request_id` 去重窗口。规划参数，当前未实现显式窗口清理 |
 | `introspect_sla_p99_ms` | `200` | FROZEN | introspect 接口 P99 延迟目标 |
-| `introspect_cache_ttl_s` | `30` | FROZEN | introspect 结果缓存 TTL |
+| `introspect_cache_ttl_s` | `30` | FROZEN | introspect 结果缓存 TTL。规划参数，当前未实现缓存 |
 
 ## 3) 心跳与可用性
 
@@ -47,14 +47,14 @@
 | `heartbeat_interval_s` | `30` | FROZEN | 卖家心跳上报间隔 |
 | `degraded_threshold_s` | `90` | FROZEN | 超过该值进入 `degraded` |
 | `offline_threshold_s` | `180` | FROZEN | 超过该值进入 `offline` |
-| `catalog_health_cache_ttl_s` | `60` | FROZEN | 买家读取健康状态缓存 TTL |
+| `catalog_health_cache_ttl_s` | `60` | FROZEN | 买家读取健康状态缓存 TTL。规划参数，当前未实现 |
 
 ## 4) 目录与路由
 
 | 参数 | 建议值 | 状态 | 说明 |
 |---|---:|---|---|
-| `catalog_cache_ttl_s` | `300` | FROZEN | 买家目录缓存 TTL |
-| `catalog_default_status_filter` | `active` | FROZEN | 默认过滤激活条目 |
+| `catalog_cache_ttl_s` | `300` | FROZEN | 买家目录缓存 TTL。规划参数，当前未实现 |
+| `catalog_default_status_filter` | `enabled` | FROZEN | 默认过滤已启用条目 |
 | `catalog_default_availability_filter` | `healthy` | FROZEN | 默认只选健康卖家 |
 | `routing_fallback_policy` | `retry_once_then_switch_seller` | FROZEN | ACK 超时后路由策略 |
 | `catalog_import_mode` | `on_demand_immediate` | FROZEN | 目录按需即时导入 |
@@ -70,8 +70,8 @@
 |---|---:|---|---|
 | `metrics_windows` | `24h,7d` | FROZEN | 默认指标窗口 |
 | `mvp_display_metrics` | `call_volume,success_rate,timeout_rate,schema_compliance_rate,p95_exec_ms` | FROZEN | MVP 对外展示硬指标 |
-| `buyer_event_required` | `request_sent,request_acked,request_succeeded,request_timeout,result_schema_invalid,result_signature_invalid` | FROZEN | 买家最小事件集 |
-| `seller_event_required` | `request_received,request_accepted,request_succeeded,request_timeout` | FROZEN | 卖家最小事件集 |
+| `buyer_event_required` | `buyer.request.dispatched,buyer.request.acked,buyer.request.succeeded,buyer.request.timed_out,buyer.request.unverified,buyer.request.failed` | FROZEN | 买家最小事件集 |
+| `seller_event_required` | `seller.task.received,seller.task.rejected,seller.task.succeeded,seller.task.timed_out` | FROZEN | 卖家最小事件集 |
 
 说明：
 - `POST /v1/metrics/events` 建议在 L0 实现最小接收能力。

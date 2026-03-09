@@ -27,7 +27,7 @@ export class MockPlatformApi {
   introspect(token) {
     const claims = this.tokens.get(token);
     if (!claims) {
-      return { active: false, error: "AUTH_TOKEN_NOT_FOUND" };
+      return { active: false, error: { code: "AUTH_TOKEN_NOT_FOUND", message: "token not found in store", retryable: false } };
     }
     return { active: true, claims };
   }

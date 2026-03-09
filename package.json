@@ -9,9 +9,14 @@
     "packages/transports/*"
   ],
   "scripts": {
+    "ops": "npm --workspace @croc/ops run start --",
     "dev:platform": "npm --workspace @croc/platform-api run dev",
     "dev:buyer": "npm --workspace @croc/buyer-controller run dev",
     "dev:seller": "npm --workspace @croc/seller-controller run dev",
+    "dev:relay": "npm --workspace @croc/transport-relay run dev",
+    "dev:ops-console": "npm --workspace @croc/ops-console run dev",
+    "dev:platform-console": "npm --workspace @croc/platform-console run dev",
+    "ops:auth": "node scripts/ops-auth.mjs",
     "start:playground": "python3 scripts/playground.py start",
     "start:playground:daemon": "python3 scripts/playground.py daemon",
     "stop:playground": "python3 scripts/playground.py stop",
@@ -24,8 +29,14 @@
     "test:integration": "vitest run --config tests/config/vitest.integration.config.mjs",
     "test:e2e": "node tests/reporters/reset-flow-report.mjs && vitest run --config tests/config/vitest.e2e.config.mjs && node tests/reporters/flow-issue-reporter.mjs",
     "test:e2e:ui": "vitest --config tests/config/vitest.e2e.config.mjs --ui",
+    "test:deploy:config": "node scripts/check-deploy-configs.mjs",
+    "test:smoke:platform": "node tests/smoke/platform-smoke.mjs",
+    "test:smoke:buyer": "node tests/smoke/buyer-smoke.mjs",
+    "test:smoke:seller": "node tests/smoke/seller-smoke.mjs",
     "test:compose-smoke": "node tests/smoke/compose-smoke.mjs",
+    "test:published-images-smoke": "COMPOSE_FILE=deploy/all-in-one/docker-compose.yml COMPOSE_ENV_FILE=deploy/all-in-one/.env.example COMPOSE_NO_BUILD=true node tests/smoke/compose-smoke.mjs",
     "test:compose-smoke:strict": "STRICT_COMPOSE_SMOKE=true node tests/smoke/compose-smoke.mjs",
+    "test:release:docs": "node scripts/check-release-docs.mjs",
     "test:flow:dashboard": "python3 -m http.server 4173",
     "test:flow:summary": "node tests/reporters/flow-issue-reporter.mjs",
     "test:ci": "npm run test && npm run test:compose-smoke:strict"
@@ -36,6 +47,7 @@
   "devDependencies": {
     "@vitest/ui": "^3.2.4",
     "ajv": "^8.17.1",
+    "happy-dom": "^20.8.3",
     "pg": "^8.20.0",
     "pg-mem": "^3.0.14",
     "vitest": "^3.2.4"

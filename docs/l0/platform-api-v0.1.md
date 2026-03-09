@@ -35,18 +35,42 @@
 
 ## 2.4 通用错误响应
 
+所有 HTTP 错误响应均使用嵌套结构化格式：
+
 ```json
 {
   "error": {
-    "code": "CONTRACT_SCHEMA_INVALID",
-    "message": "output_schema is required",
-    "retryable": false,
-    "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41"
+    "code": "AUTH_UNAUTHORIZED",
+    "message": "API key is missing or invalid",
+    "retryable": false
   }
 }
 ```
 
-错误码分域建议：
+字段说明：
+- `code`（string）：机器可读的错误码
+- `message`（string）：人类可读的错误描述
+- `retryable`（boolean）：是否建议客户端自动重试
+
+`retryable` 规则：
+- `AUTH_*`：`false`（凭证/权限问题不可自动重试）
+- `CONTRACT_*`：`false`（请求格式错误需修正）
+- `CATALOG_*` / `REQUEST_NOT_FOUND` / `SELLER_NOT_FOUND` / `USER_NOT_FOUND`：`false`
+- `*_BINDING_MISMATCH`：`false`
+- `PLATFORM_NOT_CONFIGURED` / `TRANSPORT_NOT_CONFIGURED`：`false`（配置问题）
+- `*_INTERNAL_ERROR` / 500 错误：`true`（临时故障可重试）
+- `RESULT_NOT_READY`：`true`（结果尚未就绪，可稍后重试）
+
+附加字段可出现在 `error` 对象同级，例如：
+
+```json
+{
+  "error": { "code": "not_found", "message": "no matching route", "retryable": false },
+  "path": "/v1/unknown"
+}
+```
+
+错误码分域：
 - `AUTH_*`
 - `CONTRACT_*`
 - `EXEC_*`
@@ -55,12 +79,11 @@
 - `TEMPLATE_*`
 - `PLATFORM_*`
 
-常用 `AUTH_*` 错误码（建议）：
-- `AUTH_INVALID_API_KEY`：API Key 无效或缺失
-- `AUTH_KEY_REVOKED`：API Key 已吊销
-- `AUTH_SCOPE_FORBIDDEN`：调用方缺少所需 scope（如缺少 `seller`）
+当前实现使用的 `AUTH_*` 错误码：
+- `AUTH_UNAUTHORIZED`：API Key 无效或缺失
+- `AUTH_TOKEN_INVALID`：task token 解析或签名校验失败
+- `AUTH_TOKEN_EXPIRED`：task token 已过期
 - `AUTH_RESOURCE_FORBIDDEN`：scope 正确但资源归属不匹配
-- `AUTH_ROLE_NOT_ACTIVATED`：seller 角色尚未激活（remote subagent 尚未完成 onboarding/导入）
 
 ## 2.5 用户注册 API
 
@@ -96,10 +119,11 @@
 - 用途：买家检索可调用 subagent
 
 Query 参数：
-- `status`（可选，默认 `active`）
+- `status`（可选，默认 `enabled`）
 - `availability_status`（可选，`healthy|degraded|offline`）
-- `capability`（可选，若目录实现支持）
-- `seller_id`（可选，若目录实现支持）
+- `task_type`（可选）
+- `capability`（可选）
+- `tag`（可选）
 
 200 响应示例：
 ```json
@@ -110,9 +134,8 @@ Query 参数：
       "seller_id": "seller_foxlab",
       "display_name": "FoxLab Text Classifier",
       "capabilities": ["classification", "customer_support"],
-      "supported_task_types": ["text_classification"],
-      "version": "1.0.0",
-      "status": "active",
+      "task_types": ["text_classification"],
+      "status": "enabled",
       "availability_status": "healthy",
       "last_heartbeat_at": "2026-03-02T11:59:50Z",
       "sla_hint": {
@@ -131,7 +154,6 @@ Query 参数：
       "template_ref": "docs/templates/subagents/foxlab.text.classifier.v1/"
     }
   ],
-  "next_page_token": null
 }
 ```
 
@@ -177,8 +199,8 @@ Path 参数：
 Query 参数：
 - `template_ref`（可选，建议透传目录项值；服务端用于一致性校验）
 
-请求头（可选）：
-- `If-None-Match: "<etag>"`
+请求头（可选，后续增强）：
+- `If-None-Match: "<etag>"`（当前未实现，预留）
 
 200 响应示例：
 ```json
@@ -206,7 +228,7 @@ L0 最小要求：
 
 状态码约定：
 - `200`：返回模板包
-- `304`：`ETag` 命中，无需重复下发
+- `304`：`ETag` 命中，无需重复下发（后续增强，当前未实现）
 - `404`：`TEMPLATE_NOT_FOUND`
 - `409`：`TEMPLATE_REF_MISMATCH`（传入 `template_ref` 与目录当前绑定不一致）
 
@@ -231,7 +253,7 @@ L0 最小要求：
 {
   "task_token": "<JWT_OR_EQUIVALENT>",
   "claims": {
-    "iss": "croc-platform",
+    "iss": "croc-platform-api",
     "aud": "seller_foxlab",
     "sub": "buyer_acme",
     "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
@@ -261,7 +283,7 @@ L0 最小要求：
 {
   "active": true,
   "claims": {
-    "iss": "croc-platform",
+    "iss": "croc-platform-api",
     "aud": "seller_foxlab",
     "sub": "buyer_acme",
     "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
@@ -295,13 +317,14 @@ L0 最小要求：
 - `subagent_id`
 
 鉴权约束：
-- `source=buyer`：需具备 `buyer` scope。
-- `source=seller`：需具备 `seller` scope，且校验资源归属命中。
+- 调用方需通过认证（`requireAuth`）。
+- 当前实现不按 `source` 区分 scope；后续版本将增加 `source=buyer` 需 buyer scope、`source=seller` 需 seller scope 的校验。
 
 202 响应示例：
 ```json
 {
-  "accepted": true
+  "accepted": true,
+  "event": { "source": "buyer", "event_type": "buyer.request.dispatched", "request_id": "..." }
 }
 ```
 
@@ -312,15 +335,21 @@ L0 最小要求：
 
 说明：
 - 不属于 L0 最小闭环。
-- 若实现方尚未具备聚合能力，可延后到后续版本。
+- 当前实现返回最小聚合结构，按事件类型计数。后续版本将扩展为完整的指标窗口聚合。
 
-Query 参数：
-- `window`（如 `24h|7d|30d`）
-- `seller_id`（可选）
-- `subagent_id`（可选）
-- `min_samples`（可选）
+200 响应示例（当前实现）：
+```json
+{
+  "total_events": 42,
+  "by_type": {
+    "buyer.request.dispatched": 15,
+    "buyer.request.succeeded": 12,
+    "seller.task.received": 15
+  }
+}
+```
 
-200 响应示例：
+后续目标响应（规划中，当前未实现）：
 ```json
 {
   "window": "7d",
@@ -428,7 +457,7 @@ Path 参数：
 - 方法：`GET /v1/requests/{request_id}/events`
 - 用途：买家轮询 ACK/状态事件，减少盲等
 
-Query 参数：
+Query 参数（后续增强，当前未实现）：
 - `since`（可选，后续增量查询预留）
 - `limit`（可选，后续分页预留）
 

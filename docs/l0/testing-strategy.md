@@ -23,6 +23,8 @@
 
 ## 4. Mock / Runtime 策略
 
+`tests/mocks/` 下存放以下替身定义（当前为预留，集成和 E2E 测试直接使用真实内存态服务实例）：
+
 - `MockPlatformApi`：注册、token、introspect 的轻量替身
 - `MockEmailBus`：模拟投递、轮询
 - `FakeClock`：超时测试中的可控时间源

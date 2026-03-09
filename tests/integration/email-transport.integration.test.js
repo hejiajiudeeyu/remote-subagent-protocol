@@ -4,7 +4,7 @@ import {
   InMemoryEmailTransport,
   pollThreadReplies,
   sendTaskEmail
-} from "../../packages/transports/email/src/index.js";
+} from "@croc/transport-email";
 
 describe("email transport integration", () => {
   it("sends and polls by request and direction", async () => {

@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createBuyerControllerServer } from "../../apps/buyer-controller/src/server.js";
-import { createBuyerControllerServer as createBuyerControllerCoreServer } from "../../packages/buyer-controller-core/src/index.js";
-import { createPlatformServer, createPlatformState } from "../../apps/platform-api/src/server.js";
-import { createSellerControllerServer, createSellerState } from "../../apps/seller-controller/src/server.js";
-import { createLocalTransportAdapter, createLocalTransportHub } from "../../packages/transports/local/src/index.js";
+import { createBuyerControllerServer } from "@croc/buyer-controller";
+import { createBuyerControllerServer as createBuyerControllerCoreServer } from "@croc/buyer-controller-core";
+import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
+import { createLocalTransportAdapter, createLocalTransportHub } from "@croc/transport-local";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
 describe("buyer-controller integration", () => {
@@ -133,7 +133,7 @@ describe("buyer-controller integration", () => {
       }
     });
     expect(second.status).toBe(409);
-    expect(second.body.error).toBe("REQUEST_ALREADY_TERMINAL");
+    expect(second.body.error.code).toBe("REQUEST_ALREADY_TERMINAL");
   });
 
   it("supports timeout decision to stop waiting", async () => {
@@ -251,6 +251,42 @@ describe("buyer-controller integration", () => {
     } finally {
       await closeServer(coreServer);
     }
+  });
+
+  it("returns stable result reads for terminal requests", async () => {
+    const requestId = "req_buyer_result_read_1";
+    await jsonRequest(baseUrl, "/controller/requests", {
+      method: "POST",
+      body: {
+        request_id: requestId,
+        soft_timeout_s: 5,
+        hard_timeout_s: 20
+      }
+    });
+
+    const before = await jsonRequest(baseUrl, `/controller/requests/${requestId}/result`);
+    expect(before.status).toBe(200);
+    expect(before.body).toEqual({
+      available: false,
+      status: "CREATED",
+      result_package: null
+    });
+
+    await jsonRequest(baseUrl, `/controller/requests/${requestId}/result`, {
+      method: "POST",
+      body: {
+        request_id: requestId,
+        status: "ok",
+        output: { summary: "done" },
+        schema_valid: true
+      }
+    });
+
+    const after = await jsonRequest(baseUrl, `/controller/requests/${requestId}/result`);
+    expect(after.status).toBe(200);
+    expect(after.body.available).toBe(true);
+    expect(after.body.status).toBe("SUCCEEDED");
+    expect(after.body.result_package.output).toEqual({ summary: "done" });
   });
 
   it("builds task contract drafts from prepared requests", async () => {
@@ -484,7 +520,7 @@ describe("buyer-controller integration", () => {
     const buyerUrl = await listenServer(buyerServer);
 
     try {
-      const catalog = await jsonRequest(buyerUrl, "/controller/catalog/subagents?status=active");
+      const catalog = await jsonRequest(buyerUrl, "/controller/catalog/subagents?status=enabled");
       expect(catalog.status).toBe(200);
       expect(catalog.body.items.length).toBeGreaterThan(0);
       const selected = catalog.body.items[0];
@@ -565,6 +601,99 @@ describe("buyer-controller integration", () => {
     } finally {
       await closeServer(buyerServer);
       await closeServer(sellerServer);
+      await closeServer(platformServer);
+    }
+  });
+
+  it("filters controller catalog by capability through platform", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-buyer-capability-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const registered = await jsonRequest(platformUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "buyer-capability@test.local" }
+    });
+
+    const sellerRegistration = await jsonRequest(platformUrl, "/v1/sellers/register", {
+      method: "POST",
+      body: {
+        seller_id: "seller_legalworks",
+        subagent_id: "legalworks.contract.extractor.v1",
+        display_name: "LegalWorks Contract Extractor",
+        seller_public_key_pem: platformState.bootstrap.sellers[0].signing.publicKeyPem,
+        capabilities: ["contract.extract"],
+        task_types: ["contract_extract"],
+        tags: ["legal"]
+      }
+    });
+    expect(sellerRegistration.status).toBe(201);
+    expect(sellerRegistration.body.review_status).toBe("pending");
+
+    const approved = await jsonRequest(platformUrl, "/v1/admin/subagents/legalworks.contract.extractor.v1/approve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${platformState.adminApiKey}`
+      },
+      body: { reason: "ready for discovery" }
+    });
+    expect(approved.status).toBe(200);
+
+    const buyerServer = createBuyerControllerCoreServer({
+      serviceName: "buyer-controller-capability-test",
+      platform: {
+        baseUrl: platformUrl,
+        apiKey: registered.body.api_key
+      }
+    });
+    const buyerUrl = await listenServer(buyerServer);
+
+    try {
+      const catalog = await jsonRequest(buyerUrl, "/controller/catalog/subagents?capability=contract.extract");
+      expect(catalog.status).toBe(200);
+      expect(catalog.body.items).toHaveLength(1);
+      expect(catalog.body.items[0].subagent_id).toBe("legalworks.contract.extractor.v1");
+    } finally {
+      await closeServer(buyerServer);
+      await closeServer(platformServer);
+    }
+  });
+
+  it("registers seller identities through buyer-controller using the buyer api key", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-buyer-seller-register-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const buyer = await jsonRequest(platformUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "buyer-seller-register@test.local" }
+    });
+    const buyerServer = createBuyerControllerCoreServer({
+      serviceName: "buyer-controller-seller-register-test",
+      platform: {
+        baseUrl: platformUrl
+      }
+    });
+    const buyerUrl = await listenServer(buyerServer);
+
+    try {
+      const registered = await jsonRequest(buyerUrl, "/controller/seller/register", {
+        method: "POST",
+        headers: {
+          "X-Platform-Api-Key": buyer.body.api_key
+        },
+        body: {
+          seller_id: "seller_from_buyer",
+          subagent_id: "buyer.enabled.v1",
+          display_name: "Buyer Enabled Seller",
+          seller_public_key_pem: platformState.bootstrap.sellers[0].signing.publicKeyPem,
+          capabilities: ["text.classify"]
+        }
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.body.owner_user_id).toBe(buyer.body.user_id);
+      expect(platformState.users.get(buyer.body.user_id).roles).toEqual(["buyer", "seller"]);
+      expect(registered.body.review_status).toBe("pending");
+    } finally {
+      await closeServer(buyerServer);
       await closeServer(platformServer);
     }
   });

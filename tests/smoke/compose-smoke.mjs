@@ -9,6 +9,33 @@ function runCmd(cmd, args, options = {}) {
   return result;
 }
 
+function summarizeOutput(result) {
+  return [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+}
+
+function classifyComposeFailure(output) {
+  const text = String(output || "").toLowerCase();
+  if (
+    text.includes("failed to resolve source metadata") ||
+    text.includes("error pulling image") ||
+    text.includes("pull access denied") ||
+    text.includes("failed to authorize") ||
+    text.includes("failed to fetch oauth token") ||
+    text.includes("oauth token") ||
+    text.includes("auth.docker.io/token") ||
+    text.includes("tls handshake timeout") ||
+    text.includes("i/o timeout") ||
+    text.includes("context deadline exceeded") ||
+    (text.includes("eof") && (text.includes("docker.io") || text.includes("authorize") || text.includes("token")))
+  ) {
+    return "image_pull_failed";
+  }
+  if (text.includes("port is already allocated") || text.includes("address already in use")) {
+    return "port_conflict";
+  }
+  return "compose_up_failed";
+}
+
 function canUseDocker() {
   const docker = runCmd("docker", ["info"]);
   return docker.status === 0;
@@ -16,6 +43,19 @@ function canUseDocker() {
 
 function strictModeEnabled() {
   return String(process.env.STRICT_COMPOSE_SMOKE || "false").toLowerCase() === "true";
+}
+
+function resolveComposeArgs() {
+  const composeFile = process.env.COMPOSE_FILE || "docker-compose.yml";
+  const args = ["compose", "-f", composeFile];
+  if (process.env.COMPOSE_ENV_FILE) {
+    args.push("--env-file", process.env.COMPOSE_ENV_FILE);
+  }
+  return args;
+}
+
+function useNoBuild() {
+  return String(process.env.COMPOSE_NO_BUILD || "false").toLowerCase() === "true";
 }
 
 async function sleep(ms) {
@@ -76,10 +116,9 @@ async function waitFor(fn, { timeoutMs = 30000, intervalMs = 200 } = {}) {
 async function runScenario() {
   const platform = "http://127.0.0.1:8080";
   const buyer = "http://127.0.0.1:8081";
-  const seller = "http://127.0.0.1:8082";
   const requestId = `req_compose_${Date.now()}`;
 
-  const register = await jsonRequest(platform, "/v1/users/register", {
+  const register = await jsonRequest(buyer, "/controller/register", {
     method: "POST",
     body: { email: "compose-smoke@test.local" }
   });
@@ -87,78 +126,37 @@ async function runScenario() {
     throw new Error(`register_failed: ${register.status}`);
   }
 
-  const auth = { Authorization: `Bearer ${register.body.api_key}` };
+  const auth = { "X-Platform-Api-Key": register.body.api_key };
 
-  const catalog = await jsonRequest(platform, "/v1/catalog/subagents?status=active");
+  const catalog = await jsonRequest(buyer, "/controller/catalog/subagents?status=enabled", {
+    headers: auth
+  });
   if (catalog.status !== 200 || !catalog.body?.items?.length) {
     throw new Error(`catalog_failed: ${catalog.status}`);
   }
   const selected = catalog.body.items[0];
 
-  const token = await jsonRequest(platform, "/v1/tokens/task", {
+  const started = await jsonRequest(buyer, "/controller/remote-requests", {
     method: "POST",
     headers: auth,
     body: {
       request_id: requestId,
       seller_id: selected.seller_id,
-      subagent_id: selected.subagent_id
-    }
-  });
-  if (token.status !== 201) {
-    throw new Error(`token_issue_failed: ${token.status}`);
-  }
-
-  const requestCreated = await jsonRequest(buyer, "/controller/requests", {
-    method: "POST",
-    body: {
-      request_id: requestId,
-      seller_id: selected.seller_id,
       subagent_id: selected.subagent_id,
+      expected_signer_public_key_pem: selected.seller_public_key_pem,
       soft_timeout_s: 5,
-      hard_timeout_s: 20
-    }
-  });
-  if (requestCreated.status !== 201) {
-    throw new Error(`buyer_request_create_failed: ${requestCreated.status}`);
-  }
-
-  const deliveryMeta = await jsonRequest(platform, `/v1/requests/${requestId}/delivery-meta`, {
-    method: "POST",
-    headers: auth,
-    body: {
-      seller_id: selected.seller_id,
-      subagent_id: selected.subagent_id,
-      task_token: token.body.task_token
-    }
-  });
-  if (deliveryMeta.status !== 200) {
-    throw new Error(`delivery_meta_failed: ${deliveryMeta.status}`);
-  }
-
-  const dispatched = await jsonRequest(buyer, `/controller/requests/${requestId}/dispatch`, {
-    method: "POST",
-    body: {
-      task_token: token.body.task_token,
-      to: deliveryMeta.body.delivery_address,
+      hard_timeout_s: 20,
       simulate: "success",
       delay_ms: 80
     }
   });
-  if (dispatched.status !== 202) {
-    throw new Error(`buyer_dispatch_failed: ${dispatched.status}`);
-  }
-
-  const pulled = await jsonRequest(seller, "/controller/inbox/pull", {
-    method: "POST",
-    body: {}
-  });
-  if (pulled.status !== 200 || pulled.body?.accepted?.length !== 1) {
-    throw new Error(`seller_pull_failed: ${pulled.status}`);
+  if (started.status !== 201) {
+    throw new Error(`buyer_remote_request_failed: ${started.status}`);
   }
 
   const events = await waitFor(async () => {
     const polled = await jsonRequest(platform, `/v1/requests/${requestId}/events`, {
-      headers: auth
+      headers: { Authorization: `Bearer ${register.body.api_key}` }
     });
     if (polled.status !== 200 || !polled.body?.events?.some((event) => event.event_type === "ACKED")) {
       throw new Error("ack_not_ready");
@@ -166,25 +164,15 @@ async function runScenario() {
     return polled;
   });
 
-  const inbox = await waitFor(async () => {
-    const polled = await jsonRequest(buyer, "/controller/inbox/pull", {
-      method: "POST",
-      body: {}
-    });
-    if (polled.status !== 200 || polled.body?.accepted?.length !== 1) {
-      throw new Error("buyer_inbox_not_ready");
+  const final = await waitFor(async () => {
+    const current = await jsonRequest(buyer, `/controller/requests/${requestId}`);
+    if (current.status !== 200 || current.body?.status !== "SUCCEEDED") {
+      throw new Error("buyer_result_not_ready");
     }
-    return polled;
+    return current;
   });
 
-  const final = await jsonRequest(buyer, `/controller/requests/${requestId}`);
-  if (final.status !== 200 || final.body?.status !== "SUCCEEDED") {
-    throw new Error(`unexpected_final_status: ${final.status} ${final.body?.status || "n/a"}`);
-  }
-
-  console.log(
-    `[compose-smoke] success request_id=${requestId} acked=${events.body.events.some((event) => event.event_type === "ACKED")} accepted=${inbox.body.accepted.length} final_status=${final.body.status}`
-  );
+  console.log(`[compose-smoke] success request_id=${requestId} acked=${events.body.events.some((event) => event.event_type === "ACKED")} final_status=${final.body.status}`);
 }
 
 function runPostgresCrudCheck(composeArgs) {
@@ -218,16 +206,20 @@ async function main() {
     process.exit(0);
   }
 
-  const compose = ["compose", "-f", "docker-compose.yml"];
+  const compose = resolveComposeArgs();
 
   try {
-    console.log("[compose-smoke] up --build");
-    const up = runCmd("docker", [...compose, "up", "-d", "--build"], { stdio: "inherit" });
+    console.log(`[compose-smoke] up ${useNoBuild() ? "--no-build" : "--build"}`);
+    const up = runCmd("docker", [...compose, "up", "-d", ...(useNoBuild() ? ["--no-build"] : ["--build"])]);
     if (up.status !== 0) {
-      throw new Error(`compose_up_failed: ${up.status}`);
+      const output = summarizeOutput(up);
+      const classified = classifyComposeFailure(output);
+      console.error(output);
+      throw new Error(`${classified}: ${up.status}`);
     }
 
     console.log("[compose-smoke] waiting health checks");
+    await waitHealth("http://127.0.0.1:8090/healthz");
     await waitHealth("http://127.0.0.1:8080/healthz");
     await waitHealth("http://127.0.0.1:8081/healthz");
     await waitHealth("http://127.0.0.1:8082/healthz");
@@ -235,9 +227,24 @@ async function main() {
     runPostgresCrudCheck(compose);
     await runScenario();
     console.log("[compose-smoke] completed");
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown_error";
+    console.error(`[compose-smoke] diagnostics reason=${reason}`);
+    const ps = runCmd("docker", [...compose, "ps"], { stdio: "pipe" });
+    const logs = runCmd("docker", [...compose, "logs", "--no-color", "--tail", "200"], { stdio: "pipe" });
+    if (ps.status === 0) {
+      console.error(`[compose-smoke] compose ps\n${summarizeOutput(ps)}`);
+    }
+    if (logs.status === 0) {
+      console.error(`[compose-smoke] compose logs\n${summarizeOutput(logs)}`);
+    }
+    throw error;
   } finally {
     console.log("[compose-smoke] down");
-    runCmd("docker", [...compose, "down"], { stdio: "inherit" });
+    const down = runCmd("docker", [...compose, "down"], { stdio: "pipe" });
+    if (down.status !== 0) {
+      console.error(`[compose-smoke] down_failed\n${summarizeOutput(down)}`);
+    }
   }
 }
 

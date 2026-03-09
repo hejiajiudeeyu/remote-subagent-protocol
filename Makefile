@@ -3,7 +3,7 @@ SHELL := /bin/zsh
 COMPOSE_FILE ?= docker-compose.yml
 COMPOSE ?= docker compose -f $(COMPOSE_FILE)
 
-.PHONY: up down restart logs ps build clean deploy test test-unit test-integration test-e2e test-e2e-ui test-flow-ui test-compose-smoke test-compose-smoke-strict test-all test-ci
+.PHONY: up down restart logs ps build clean deploy deploy-platform deploy-relay deploy-buyer deploy-seller deploy-ops deploy-all ops-auth check-deploy-config smoke-platform smoke-buyer smoke-seller test test-unit test-integration test-e2e test-e2e-ui test-flow-ui test-compose-smoke test-compose-smoke-strict test-all test-ci
 
 up:
 	$(COMPOSE) up -d --build
@@ -28,6 +28,39 @@ clean:
 deploy:
 	@echo "Deploy shortcut (current profile uses docker compose single-host deployment)."
 	$(COMPOSE) up -d --build
+
+deploy-platform:
+	docker compose -f deploy/platform/docker-compose.yml up -d --build
+
+deploy-relay:
+	docker compose -f deploy/relay/docker-compose.yml up -d --build
+
+deploy-buyer:
+	docker compose -f deploy/buyer/docker-compose.yml up -d --build
+
+deploy-seller:
+	docker compose -f deploy/seller/docker-compose.yml up -d --build
+
+deploy-ops:
+	docker compose -f deploy/ops/docker-compose.yml up -d --build
+
+deploy-all:
+	docker compose -f deploy/all-in-one/docker-compose.yml up -d --build
+
+ops-auth:
+	npm run ops:auth -- $(ARGS)
+
+check-deploy-config:
+	npm run test:deploy:config
+
+smoke-platform:
+	npm run test:smoke:platform
+
+smoke-buyer:
+	npm run test:smoke:buyer
+
+smoke-seller:
+	npm run test:smoke:seller
 
 test:
 	npm run test

@@ -119,7 +119,7 @@ sequenceDiagram
             P-->>BC: [B1-RES] 候选列表 + 筛选字段 + score/match_reasons/score_breakdown
         end
     else Catalog（MVP 默认）
-        BC->>P: [B2-REQ] GET /v1/catalog/subagents?capability=...&status=active
+        BC->>P: [B2-REQ] GET /v1/catalog/subagents?capability=...&status=enabled
         alt Catalog失败
             P-->>BC: [B2-F1] 错误: PLATFORM_RATE_LIMITED / PLATFORM_*
             BC->>P: [B2-F2] POST /v1/metrics/events (catalog_query_failed)

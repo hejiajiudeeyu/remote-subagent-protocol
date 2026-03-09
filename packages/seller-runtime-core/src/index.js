@@ -1,8 +1,15 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { canonicalizeResultPackageForSignature } from "../../contracts/src/index.js";
-import { createExampleFunctionExecutor, createFunctionExecutor, createSimulatorExecutor, deferTask } from "./executors.js";
+import { canonicalizeResultPackageForSignature } from "@croc/contracts";
+import {
+  createConfiguredSubagentExecutor,
+  createExampleFunctionExecutor,
+  createFunctionExecutor,
+  createSimulatorExecutor,
+  createSubagentRouterExecutor,
+  deferTask
+} from "./executors.js";
 
 function nowIso() {
   return new Date().toISOString();
@@ -37,6 +44,10 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
+function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
+  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+}
+
 async function postJson(baseUrl, pathname, { method = "POST", headers = {}, body } = {}) {
   const response = await fetch(new URL(pathname, baseUrl), {
     method,
@@ -67,6 +78,29 @@ async function postMetricEvent(platform, body) {
   });
 
   return { ok: response.status >= 200 && response.status < 300, response };
+}
+
+async function registerSellerOnPlatform(platform, body) {
+  if (!platform?.baseUrl) {
+    throw new Error("seller_platform_base_url_required");
+  }
+
+  const response = await postJson(platform.baseUrl, "/v1/sellers/register", {
+    headers: platform.apiKey
+      ? {
+          Authorization: `Bearer ${platform.apiKey}`
+        }
+      : {},
+    body
+  });
+
+  if (response.status !== 201) {
+    const error = new Error("SELLER_PLATFORM_REGISTER_FAILED");
+    error.response = response;
+    throw error;
+  }
+
+  return response.body;
 }
 
 async function persistSellerState(onStateChanged, state) {
@@ -242,7 +276,7 @@ async function introspectTaskToken(task, platform) {
     }
   });
 
-  return response.body || { active: false, error: "AUTH_INTROSPECT_FAILED" };
+  return response.body || { active: false, error: { code: "AUTH_INTROSPECT_FAILED", message: "token introspection request failed", retryable: true } };
 }
 
 function createTaskRecord(input, state, overrides = {}) {
@@ -321,6 +355,8 @@ function validateTaskGuardrails(task, { executor, guardrails = {} } = {}) {
     ? guardrails.allowedTaskTypes
     : Array.isArray(executor?.allowedTaskTypes)
       ? executor.allowedTaskTypes
+      : typeof executor?.getAllowedTaskTypes === "function"
+        ? executor.getAllowedTaskTypes(task.subagent_id)
       : null;
 
   if (hasSoftTimeout && softTimeoutS <= 0) {
@@ -405,6 +441,7 @@ export function createSellerState(options = {}) {
       seller_id: options.sellerId || "seller_foxlab",
       subagent_ids: options.subagentIds || ["foxlab.text.classifier.v1"]
     },
+    subagents: Array.isArray(options.subagents) ? options.subagents : [],
     heartbeat: {
       status: "healthy",
       last_sent_at: null
@@ -418,6 +455,8 @@ export function serializeSellerState(state) {
     requestIndex: Array.from(state.requestIndex.entries()),
     queue: [...state.queue],
     processing: state.processing,
+    identity: state.identity,
+    subagents: state.subagents,
     heartbeat: state.heartbeat
   };
 }
@@ -439,6 +478,8 @@ export function hydrateSellerState(state, snapshot) {
 
   state.queue = Array.isArray(snapshot.queue) ? [...snapshot.queue] : [];
   state.processing = false;
+  state.identity = snapshot.identity || state.identity;
+  state.subagents = Array.isArray(snapshot.subagents) ? snapshot.subagents : state.subagents;
   state.heartbeat = snapshot.heartbeat || state.heartbeat;
   return state;
 }
@@ -519,6 +560,126 @@ async function enqueueTask(state, task, { executor, transport = null, platform =
   scheduleProcessQueue(state, { executor, transport, platform, onStateChanged });
 }
 
+async function processSellerInbox(state, {
+  executor,
+  transport = null,
+  platform = null,
+  guardrails = {},
+  onStateChanged = null,
+  receiver = null,
+  limit = 10
+} = {}) {
+  if (!transport) {
+    return { accepted: [] };
+  }
+
+  const polled = await transport.poll({
+    limit,
+    receiver: receiver || state.identity.seller_id
+  });
+  const accepted = [];
+
+  for (const envelope of polled.items) {
+    if (envelope.seller_id && envelope.seller_id !== state.identity.seller_id) {
+      continue;
+    }
+    if (envelope.subagent_id && !state.identity.subagent_ids.includes(envelope.subagent_id)) {
+      continue;
+    }
+
+    await postMetricEvent(platform, {
+      source: "seller-controller",
+      event_type: "seller.task.received",
+      request_id: envelope.request_id || null,
+      seller_id: state.identity.seller_id,
+      subagent_id: envelope.subagent_id || null
+    });
+
+    const existing = getTaskByRequestId(state, envelope.request_id);
+    if (existing) {
+      if (existing.result_package) {
+        await sendResultEnvelope(
+          {
+            ...existing,
+            return_route: envelope.from || existing.return_route,
+            reply_to: envelope.from || existing.reply_to,
+            thread_id: envelope.thread_id || existing.thread_id
+          },
+          state,
+          transport
+        );
+      }
+
+      await transport.ack(envelope.message_id);
+      accepted.push({
+        message_id: envelope.message_id,
+        task_id: existing.task_id,
+        deduped: true,
+        replayed: Boolean(existing.result_package)
+      });
+      continue;
+    }
+
+    const task = createTaskRecord(
+      {
+        ...envelope,
+        raw_envelope: envelope
+      },
+      state,
+      {
+        return_route: envelope.from || null,
+        reply_to: envelope.from || "buyer-controller",
+        thread_id: envelope.thread_id || `req:${envelope.request_id}`
+      }
+    );
+
+    const introspection = await introspectTaskToken(task, platform);
+    if (introspection.active === false) {
+      task.status = "COMPLETED";
+      task.completed_at = nowIso();
+      task.updated_at = task.completed_at;
+      task.result_package = signResultPayload(
+        buildErrorResultPayload(task, {
+          code: introspection.error?.code || introspection.error || "AUTH_TOKEN_INVALID",
+          message: introspection.error?.message || "Task token rejected during seller validation"
+        }),
+        state
+      );
+      rememberTask(state, task);
+      await sendResultEnvelope(task, state, transport);
+      await reportSellerMetric(platform, task, "seller.task.rejected", {
+        code: introspection.error?.code || introspection.error || "AUTH_TOKEN_INVALID"
+      });
+      await persistSellerState(onStateChanged, state);
+    } else {
+      const guardrailError = validateTaskGuardrails(task, { executor, guardrails });
+      if (guardrailError) {
+        task.status = "COMPLETED";
+        task.completed_at = nowIso();
+        task.updated_at = task.completed_at;
+        task.result_package = signResultPayload(buildResultPayload(task, guardrailError), state);
+        rememberTask(state, task);
+        await sendResultEnvelope(task, state, transport);
+        await reportSellerMetric(platform, task, "seller.task.rejected", {
+          code: guardrailError.error.code
+        });
+        await persistSellerState(onStateChanged, state);
+      } else {
+        await enqueueTask(state, task, { executor, transport, platform, onStateChanged });
+        await reportSellerMetric(platform, task, "seller.task.accepted");
+        const acked = await ackPlatform(task, platform);
+        task.acked = acked.ok;
+        await persistSellerState(onStateChanged, state);
+      }
+    }
+
+    await transport.ack(envelope.message_id);
+    accepted.push({ message_id: envelope.message_id, task_id: task.task_id });
+  }
+
+  return { accepted };
+}
+
 export function startSellerHeartbeatLoop({
   state,
   platform = null,
@@ -563,6 +724,56 @@ export function startSellerHeartbeatLoop({
   };
 }
 
+export function startSellerInboxLoop({
+  state,
+  executor = createSimulatorExecutor(),
+  transport = null,
+  platform = null,
+  guardrails = {},
+  onStateChanged = null,
+  intervalMs = 250,
+  receiver = null,
+  logger = console
+} = {}) {
+  if (!transport) {
+    return () => {};
+  }
+
+  let stopped = false;
+  let running = false;
+
+  async function pullInbox() {
+    if (stopped || running) {
+      return;
+    }
+    running = true;
+    try {
+      await processSellerInbox(state, {
+        executor,
+        transport,
+        platform,
+        guardrails,
+        onStateChanged,
+        receiver
+      });
+    } catch (error) {
+      logger?.warn?.(`[seller-inbox] pull failed: ${error instanceof Error ? error.message : "unknown_error"}`);
+    } finally {
+      running = false;
+    }
+  }
+
+  void pullInbox();
+  const timer = setInterval(() => {
+    void pullInbox();
+  }, intervalMs);
+
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
 export function createSellerControllerServer({
   state = createSellerState(),
   serviceName = "seller-controller",
@@ -570,9 +781,11 @@ export function createSellerControllerServer({
   platform = null,
   executor = createSimulatorExecutor(),
   guardrails = {},
-  onStateChanged = null
+  background = {},
+  onStateChanged = null,
+  onPlatformConfigured = null
 } = {}) {
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", "http://localhost");
     const pathname = url.pathname;
@@ -603,6 +816,14 @@ export function createSellerControllerServer({
           service: serviceName,
           status: "running",
           executor: executor.name || "unknown",
+          seller_id: state.identity.seller_id,
+          subagent_ids: state.identity.subagent_ids,
+          configured_subagents:
+            typeof executor?.listSubagents === "function"
+              ? executor.listSubagents()
+              : Array.isArray(state.subagents)
+                ? state.subagents
+                : [],
           guardrails: {
             max_hard_timeout_s: Number.isFinite(Number(guardrails.maxHardTimeoutS))
               ? Number(guardrails.maxHardTimeoutS)
@@ -618,6 +839,65 @@ export function createSellerControllerServer({
           seller_id: state.identity.seller_id,
           public_key_pem: state.signing.publicKeyPem
         });
+        return;
+      }
+
+      if (method === "POST" && pathname === "/controller/register") {
+        try {
+          const body = await parseJsonBody(req);
+          const sellerId = body.seller_id || state.identity.seller_id;
+          const subagentId = body.subagent_id || state.identity.subagent_ids[0];
+          const headerApiKey = req.headers["x-platform-api-key"];
+          const registerPlatform = {
+            ...platform,
+            apiKey:
+              (typeof headerApiKey === "string" && headerApiKey.trim()) ||
+              body.platform_api_key ||
+              platform?.apiKey ||
+              null
+          };
+          const registered = await registerSellerOnPlatform(registerPlatform, {
+            seller_id: sellerId,
+            subagent_id: subagentId,
+            display_name: body.display_name || `${sellerId} ${subagentId}`,
+            template_ref: body.template_ref || `${subagentId}@v1`,
+            delivery_address: body.delivery_address || `local://relay/${sellerId}/${subagentId}`,
+            seller_public_key_pem: state.signing.publicKeyPem,
+            task_types: body.task_types || [],
+            capabilities: body.capabilities || [],
+            tags: body.tags || [],
+            input_schema: body.input_schema || null,
+            output_schema: body.output_schema || null,
+            contact_email: body.contact_email || null,
+            support_email: body.support_email || null
+          });
+
+          state.identity.seller_id = registered.seller_id;
+          state.identity.subagent_ids = Array.from(new Set([...(state.identity.subagent_ids || []), registered.subagent_id]));
+          if (platform) {
+            platform.apiKey = registered.api_key || platform.apiKey;
+            platform.sellerId = registered.seller_id;
+          }
+          await persistSellerState(onStateChanged, state);
+          if (typeof onPlatformConfigured === "function") {
+            await onPlatformConfigured({
+              platform,
+              state,
+              registered
+            });
+          }
+          sendJson(res, 201, registered);
+        } catch (error) {
+          if (error instanceof Error && error.message === "seller_platform_base_url_required") {
+            sendError(res, 409, "PLATFORM_NOT_CONFIGURED", "platform base URL is not configured");
+            return;
+          }
+          if (error?.response) {
+            sendJson(res, error.response.status, error.response.body || { error: { code: "SELLER_PLATFORM_REGISTER_FAILED", message: "registration rejected by platform", retryable: false } });
+            return;
+          }
+          sendError(res, 502, "SELLER_PLATFORM_REGISTER_FAILED", error instanceof Error ? error.message : "unknown_error", { retryable: true });
+        }
         return;
       }
 
@@ -656,116 +936,22 @@ export function createSellerControllerServer({
 
       if (method === "POST" && pathname === "/controller/inbox/pull") {
         if (!transport) {
-          sendJson(res, 409, { error: "TRANSPORT_NOT_CONFIGURED" });
+          sendError(res, 409, "TRANSPORT_NOT_CONFIGURED", "message transport is not configured");
           return;
         }
 
         const body = await parseJsonBody(req);
-        const polled = await transport.poll({
-          limit: Number(body.limit || 10),
-          receiver: body.receiver || state.identity.seller_id
+        const result = await processSellerInbox(state, {
+          executor,
+          transport,
+          platform,
+          guardrails,
+          onStateChanged,
+          receiver: body.receiver || state.identity.seller_id,
+          limit: Number(body.limit || 10)
         });
-        const accepted = [];
 
-        for (const envelope of polled.items) {
-          if (envelope.seller_id && envelope.seller_id !== state.identity.seller_id) {
-            continue;
-          }
-          if (envelope.subagent_id && !state.identity.subagent_ids.includes(envelope.subagent_id)) {
-            continue;
-          }
-
-          await postMetricEvent(platform, {
-            source: "seller-controller",
-            event_type: "seller.task.received",
-            request_id: envelope.request_id || null,
-            seller_id: state.identity.seller_id,
-            subagent_id: envelope.subagent_id || null
-          });
-
-          const existing = getTaskByRequestId(state, envelope.request_id);
-          if (existing) {
-            if (existing.result_package) {
-              await sendResultEnvelope(
-                {
-                  ...existing,
-                  return_route: envelope.from || existing.return_route,
-                  reply_to: envelope.from || existing.reply_to,
-                  thread_id: envelope.thread_id || existing.thread_id
-                },
-                state,
-                transport
-              );
-            }
-
-            await transport.ack(envelope.message_id);
-            accepted.push({
-              message_id: envelope.message_id,
-              task_id: existing.task_id,
-              deduped: true,
-              replayed: Boolean(existing.result_package)
-            });
-            continue;
-          }
-
-          const task = createTaskRecord(
-            {
-              ...envelope,
-              raw_envelope: envelope
-            },
-            state,
-            {
-              return_route: envelope.from || null,
-              reply_to: envelope.from || "buyer-controller",
-              thread_id: envelope.thread_id || `req:${envelope.request_id}`
-            }
-          );
-
-          const introspection = await introspectTaskToken(task, platform);
-          if (introspection.active === false) {
-            task.status = "COMPLETED";
-            task.completed_at = nowIso();
-            task.updated_at = task.completed_at;
-            task.result_package = signResultPayload(
-              buildErrorResultPayload(task, {
-                code: introspection.error || "AUTH_TOKEN_INVALID",
-                message: "Task token rejected during seller validation"
-              }),
-              state
-            );
-            rememberTask(state, task);
-            await sendResultEnvelope(task, state, transport);
-            await reportSellerMetric(platform, task, "seller.task.rejected", {
-              code: introspection.error || "AUTH_TOKEN_INVALID"
-            });
-            await persistSellerState(onStateChanged, state);
-          } else {
-            const guardrailError = validateTaskGuardrails(task, { executor, guardrails });
-            if (guardrailError) {
-              task.status = "COMPLETED";
-              task.completed_at = nowIso();
-              task.updated_at = task.completed_at;
-              task.result_package = signResultPayload(buildResultPayload(task, guardrailError), state);
-              rememberTask(state, task);
-              await sendResultEnvelope(task, state, transport);
-              await reportSellerMetric(platform, task, "seller.task.rejected", {
-                code: guardrailError.error.code
-              });
-              await persistSellerState(onStateChanged, state);
-            } else {
-              await enqueueTask(state, task, { executor, transport, platform, onStateChanged });
-              await reportSellerMetric(platform, task, "seller.task.accepted");
-              const acked = await ackPlatform(task, platform);
-              task.acked = acked.ok;
-              await persistSellerState(onStateChanged, state);
-            }
-          }
-
-          await transport.ack(envelope.message_id);
-          accepted.push({ message_id: envelope.message_id, task_id: task.task_id });
-        }
-
-        sendJson(res, 200, { accepted });
+        sendJson(res, 200, { accepted: result.accepted });
         return;
       }
 
@@ -780,7 +966,7 @@ export function createSellerControllerServer({
       if (method === "GET" && taskMatch) {
         const task = state.tasks.get(taskMatch[1]);
         if (!task) {
-          sendJson(res, 404, { error: "TASK_NOT_FOUND" });
+          sendError(res, 404, "TASK_NOT_FOUND", "task does not exist");
           return;
         }
 
@@ -792,7 +978,7 @@ export function createSellerControllerServer({
       if (method === "GET" && resultMatch) {
         const task = state.tasks.get(resultMatch[1]);
         if (!task) {
-          sendJson(res, 404, { error: "TASK_NOT_FOUND" });
+          sendError(res, 404, "TASK_NOT_FOUND", "task does not exist");
           return;
         }
 
@@ -809,12 +995,12 @@ export function createSellerControllerServer({
       if (method === "POST" && replayMatch) {
         const task = state.tasks.get(replayMatch[1]);
         if (!task) {
-          sendJson(res, 404, { error: "TASK_NOT_FOUND" });
+          sendError(res, 404, "TASK_NOT_FOUND", "task does not exist");
           return;
         }
 
         if (!task.result_package) {
-          sendJson(res, 409, { error: "RESULT_NOT_READY", status: task.status });
+          sendError(res, 409, "RESULT_NOT_READY", "task result is not yet available", { status: task.status });
           return;
         }
 
@@ -822,24 +1008,41 @@ export function createSellerControllerServer({
         return;
       }
 
-      sendJson(res, 404, { error: "not_found", path: pathname });
+      sendError(res, 404, "not_found", "no matching route", { path: pathname });
     } catch (error) {
       if (error.message === "invalid_json") {
-        sendJson(res, 400, { error: "CONTRACT_INVALID_JSON" });
+        sendError(res, 400, "CONTRACT_INVALID_JSON", "request body is not valid JSON");
         return;
       }
 
-      sendJson(res, 500, {
-        error: "SELLER_CONTROLLER_INTERNAL_ERROR",
-        message: error instanceof Error ? error.message : "unknown_error"
-      });
+      sendError(res, 500, "SELLER_RUNTIME_INTERNAL_ERROR", error instanceof Error ? error.message : "unknown_error", { retryable: true });
     }
   });
+
+  if (background.enabled === true) {
+    const stopInboxLoop = startSellerInboxLoop({
+      state,
+      executor,
+      transport,
+      platform,
+      guardrails,
+      onStateChanged,
+      intervalMs: Number(background.inboxPollIntervalMs || 250),
+      receiver: background.receiver || state.identity.seller_id
+    });
+    server.on("close", () => {
+      stopInboxLoop();
+    });
+  }
+
+  return server;
 }
 
 export {
+  createConfiguredSubagentExecutor,
   createExampleFunctionExecutor,
   createFunctionExecutor,
   createSimulatorExecutor,
+  createSubagentRouterExecutor,
   deferTask
 };

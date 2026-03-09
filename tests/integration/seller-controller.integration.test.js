@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "../../apps/platform-api/src/server.js";
-import { createSellerControllerServer, createSellerState } from "../../apps/seller-controller/src/server.js";
-import { createFunctionExecutor, startSellerHeartbeatLoop } from "../../packages/seller-runtime-core/src/index.js";
-import { createLocalTransportAdapter, createLocalTransportHub } from "../../packages/transports/local/src/index.js";
+import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
+import { createFunctionExecutor, createSubagentRouterExecutor, startSellerHeartbeatLoop } from "@croc/seller-runtime-core";
+import { createLocalTransportAdapter, createLocalTransportHub } from "@croc/transport-local";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
 describe("seller-controller integration", () => {
@@ -88,7 +91,7 @@ describe("seller-controller integration", () => {
       method: "POST"
     });
     expect(replayEarly.status).toBe(409);
-    expect(replayEarly.body.error).toBe("RESULT_NOT_READY");
+    expect(replayEarly.body.error.code).toBe("RESULT_NOT_READY");
 
     const result = await waitFor(async () => {
       const polled = await jsonRequest(baseUrl, `/controller/tasks/${created.body.task_id}/result`);
@@ -104,6 +107,255 @@ describe("seller-controller integration", () => {
     expect(replayReady.status).toBe(200);
     expect(replayReady.body.replayed).toBe(true);
     expect(replayReady.body.result_package.request_id).toBe(result.body.result_package.request_id);
+  });
+
+  it("registers seller identities through seller-controller", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-seller-register-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const sellerServer = createSellerControllerServer({
+      serviceName: "seller-controller-register-test",
+      platform: {
+        baseUrl: platformUrl
+      },
+      state: createSellerState({
+        sellerId: "seller_register_test",
+        subagentIds: ["register.test.v1"]
+      })
+    });
+    const sellerUrl = await listenServer(sellerServer);
+
+    try {
+      const registered = await jsonRequest(sellerUrl, "/controller/register", {
+        method: "POST",
+        body: {
+          display_name: "Register Test Seller",
+          task_types: ["contract_extract"],
+          capabilities: ["contract.extract"],
+          tags: ["legal"]
+        }
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.body.seller_id).toBe("seller_register_test");
+      expect(registered.body.subagent_id).toBe("register.test.v1");
+      expect(registered.body.api_key).toMatch(/^sk_seller_/);
+      expect(registered.body.review_status).toBe("pending");
+
+      const catalog = await jsonRequest(platformUrl, "/v1/catalog/subagents?capability=contract.extract");
+      expect(catalog.status).toBe(200);
+      expect(catalog.body.items.some((item) => item.subagent_id === "register.test.v1")).toBe(false);
+
+      const approved = await jsonRequest(platformUrl, "/v1/admin/subagents/register.test.v1/approve", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${platformState.adminApiKey}`
+        },
+        body: { reason: "approved for seller runtime" }
+      });
+      expect(approved.status).toBe(200);
+
+      const enabledCatalog = await jsonRequest(platformUrl, "/v1/catalog/subagents?capability=contract.extract");
+      expect(enabledCatalog.status).toBe(200);
+      expect(enabledCatalog.body.items.some((item) => item.subagent_id === "register.test.v1")).toBe(true);
+    } finally {
+      await closeServer(sellerServer);
+      await closeServer(platformServer);
+    }
+  });
+
+  it("registers through seller-controller with a buyer api key and stores the issued seller credentials", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-seller-register-owned-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const buyer = await jsonRequest(platformUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "seller-owner@test.local" }
+    });
+    const platformConfig = {
+      baseUrl: platformUrl,
+      apiKey: null,
+      sellerId: null
+    };
+    const state = createSellerState({
+      sellerId: "seller_owned_test",
+      subagentIds: ["owned.test.v1"]
+    });
+    const sellerServer = createSellerControllerServer({
+      serviceName: "seller-controller-register-owned-test",
+      platform: platformConfig,
+      state
+    });
+    const sellerUrl = await listenServer(sellerServer);
+
+    try {
+      const registered = await jsonRequest(sellerUrl, "/controller/register", {
+        method: "POST",
+        headers: {
+          "X-Platform-Api-Key": buyer.body.api_key
+        },
+        body: {
+          display_name: "Owned Test Seller"
+        }
+      });
+      expect(registered.status).toBe(201);
+      expect(registered.body.owner_user_id).toBe(buyer.body.user_id);
+      expect(platformConfig.apiKey).toBe(registered.body.api_key);
+      expect(platformConfig.sellerId).toBe("seller_owned_test");
+      expect(platformState.users.get(buyer.body.user_id).roles).toEqual(["buyer", "seller"]);
+      expect(registered.body.review_status).toBe("pending");
+    } finally {
+      await closeServer(sellerServer);
+      await closeServer(platformServer);
+    }
+  });
+
+  it("executes tasks through a configured process adapter", async () => {
+    const scriptDir = fs.mkdtempSync(path.join(os.tmpdir(), "seller-process-adapter-"));
+    const scriptPath = path.join(scriptDir, "worker.js");
+    fs.writeFileSync(
+      scriptPath,
+      "process.stdin.setEncoding('utf8');let data='';process.stdin.on('data',c=>data+=c);process.stdin.on('end',()=>{const input=JSON.parse(data);process.stdout.write(JSON.stringify({status:'ok',output:{adapter:'process',request_id:input.request_id,summary:input.input?.text||null},usage:{tokens_in:1,tokens_out:1}}));});\n",
+      "utf8"
+    );
+
+    const processServer = createSellerControllerServer({
+      serviceName: "seller-controller-process-adapter-test",
+      state: createSellerState({
+        sellerId: "seller_process_adapter",
+        subagentIds: ["process.adapter.v1"],
+        subagents: [
+          {
+            subagent_id: "process.adapter.v1",
+            display_name: "Process Adapter",
+            enabled: true,
+            adapter_type: "process",
+            adapter: {
+              cmd: `node ${scriptPath}`
+            },
+            task_types: ["summarize"]
+          }
+        ]
+      }),
+      executor: createSubagentRouterExecutor([
+        {
+          subagent_id: "process.adapter.v1",
+          display_name: "Process Adapter",
+          enabled: true,
+          adapter_type: "process",
+          adapter: {
+            cmd: `node ${scriptPath}`
+          },
+          task_types: ["summarize"]
+        }
+      ])
+    });
+    const processUrl = await listenServer(processServer);
+
+    try {
+      const created = await jsonRequest(processUrl, "/controller/tasks", {
+        method: "POST",
+        body: {
+          request_id: "req_process_adapter_1",
+          subagent_id: "process.adapter.v1",
+          task_type: "summarize",
+          task_input: { text: "hello process" }
+        }
+      });
+      expect(created.status).toBe(202);
+
+      const result = await waitFor(async () => {
+        const polled = await jsonRequest(processUrl, `/controller/tasks/${created.body.task_id}/result`);
+        if (polled.status !== 200 || polled.body.available !== true) {
+          throw new Error("result_not_ready");
+        }
+        return polled;
+      });
+
+      expect(result.body.result_package.output.adapter).toBe("process");
+      expect(result.body.result_package.output.summary).toBe("hello process");
+    } finally {
+      await closeServer(processServer);
+      fs.rmSync(scriptDir, { recursive: true, force: true });
+    }
+  });
+
+  it("executes tasks through a configured http adapter", async () => {
+    const { createServer } = await import("node:http");
+    const adapterServer = createServer((req, res) => {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(
+          JSON.stringify({
+            status: "ok",
+            output: {
+              adapter: "http",
+              echoed_request_id: body.request_id
+            },
+            usage: { tokens_in: 1, tokens_out: 1 }
+          })
+        );
+      });
+    });
+    const adapterUrl = await listenServer(adapterServer);
+
+    const httpServer = createSellerControllerServer({
+      serviceName: "seller-controller-http-adapter-test",
+      state: createSellerState({
+        sellerId: "seller_http_adapter",
+        subagentIds: ["http.adapter.v1"],
+        subagents: [
+          {
+            subagent_id: "http.adapter.v1",
+            display_name: "HTTP Adapter",
+            enabled: true,
+            adapter_type: "http",
+            adapter: {
+              url: adapterUrl
+            }
+          }
+        ]
+      }),
+      executor: createSubagentRouterExecutor([
+        {
+          subagent_id: "http.adapter.v1",
+          display_name: "HTTP Adapter",
+          enabled: true,
+          adapter_type: "http",
+          adapter: {
+            url: adapterUrl
+          }
+        }
+      ])
+    });
+    const httpUrl = await listenServer(httpServer);
+
+    try {
+      const created = await jsonRequest(httpUrl, "/controller/tasks", {
+        method: "POST",
+        body: {
+          request_id: "req_http_adapter_1",
+          subagent_id: "http.adapter.v1"
+        }
+      });
+      expect(created.status).toBe(202);
+
+      const result = await waitFor(async () => {
+        const polled = await jsonRequest(httpUrl, `/controller/tasks/${created.body.task_id}/result`);
+        if (polled.status !== 200 || polled.body.available !== true) {
+          throw new Error("result_not_ready");
+        }
+        return polled;
+      });
+
+      expect(result.body.result_package.output.adapter).toBe("http");
+      expect(result.body.result_package.output.echoed_request_id).toBe("req_http_adapter_1");
+    } finally {
+      await closeServer(httpServer);
+      await closeServer(adapterServer);
+    }
   });
 
   it("introspects inbound token, auto-acks platform, and sends result to buyer queue", async () => {

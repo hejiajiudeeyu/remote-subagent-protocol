@@ -933,7 +933,11 @@
         return body.slice(0, 180);
       }
       if (body.error) {
-        return `${body.error}${body.message ? `: ${body.message}` : ""}`;
+        const err = body.error;
+        if (typeof err === "object" && err.code) {
+          return `${err.code}${err.message ? `: ${err.message}` : ""}`;
+        }
+        return `${err}${body.message ? `: ${body.message}` : ""}`;
       }
       if (body.request?.status) {
         return `request status=${body.request.status}`;
@@ -1069,10 +1073,10 @@
     document.getElementById("listCatalogBtn").addEventListener("click", async () => {
       const response = await run("list catalog", {
           target: "platform",
-          path: "/v1/catalog/subagents?status=active",
+          path: "/v1/catalog/subagents?status=enabled",
           summary: "读取 Platform catalog，锁定 seller 与 subagent。"
         }, () =>
-        request("platform", "/v1/catalog/subagents?status=active", {
+        request("platform", "/v1/catalog/subagents?status=enabled", {
           headers: buyerAuthHeaders()
         })
       );

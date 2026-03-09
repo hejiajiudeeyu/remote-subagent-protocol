@@ -1,0 +1,16 @@
+{
+  "name": "@croc/ops",
+  "version": "0.1.0",
+  "type": "module",
+  "bin": {
+    "croc-ops": "src/cli.js"
+  },
+  "scripts": {
+    "start": "node src/cli.js"
+  },
+  "dependencies": {
+    "@croc/buyer-controller": "0.1.0",
+    "@croc/seller-controller": "0.1.0",
+    "@croc/transport-relay": "0.1.0"
+  }
+}

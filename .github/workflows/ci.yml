@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit
+      - run: npm run test:integration
+      - run: npm run test:e2e
+
+  deploy-config:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:deploy:config
+      - run: npm run test:release:docs
+
+  standalone-deploy-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Warm base images
+        run: |
+          set -euo pipefail
+          docker pull postgres:16-alpine
+          docker pull node:22-alpine
+      - name: Platform, Buyer, Seller standalone smoke
+        run: |
+          set -euo pipefail
+          cleanup() {
+            docker compose -f deploy/seller/docker-compose.yml --env-file deploy/seller/.env.example down -v || true
+            docker compose -f deploy/buyer/docker-compose.yml --env-file deploy/buyer/.env.example down -v || true
+            docker compose -f deploy/relay/docker-compose.yml --env-file deploy/relay/.env.example down -v || true
+            docker compose -f deploy/platform/docker-compose.yml --env-file deploy/platform/.env.example down -v || true
+          }
+          trap cleanup EXIT
+
+          docker compose -f deploy/platform/docker-compose.yml --env-file deploy/platform/.env.example up -d --build
+          docker compose -f deploy/relay/docker-compose.yml --env-file deploy/relay/.env.example up -d --build
+          npm run test:smoke:platform
+
+          docker compose -f deploy/buyer/docker-compose.yml --env-file deploy/buyer/.env.example up -d --build
+          npm run test:smoke:buyer
+
+          docker compose -f deploy/seller/docker-compose.yml --env-file deploy/seller/.env.example up -d --build
+          npm run test:smoke:seller
+
+  all-in-one-compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Warm base images
+        run: |
+          set -euo pipefail
+          docker pull postgres:16-alpine
+          docker pull node:22-alpine
+      - run: npm run test:compose-smoke:strict
+
+  published-image-compose-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Warm base images
+        run: |
+          set -euo pipefail
+          docker pull postgres:16-alpine
+          docker pull node:22-alpine
+      - name: Build release-shaped images locally
+        run: |
+          set -euo pipefail
+          export IMAGE_REGISTRY=local
+          export IMAGE_TAG=ci
+          docker compose -f deploy/all-in-one/docker-compose.yml --env-file deploy/all-in-one/.env.example build
+      - name: Smoke published-image path
+        run: |
+          set -euo pipefail
+          export IMAGE_REGISTRY=local
+          export IMAGE_TAG=ci
+          npm run test:published-images-smoke

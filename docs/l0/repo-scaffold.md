@@ -9,15 +9,26 @@
 ├── apps/
 │   ├── platform-api/
 │   ├── buyer-controller/
-│   └── seller-controller/
+│   ├── seller-controller/
+│   ├── transport-relay/
+│   ├── ops/
+│   ├── ops-console/
+│   └── platform-console/
 ├── packages/
 │   ├── contracts/
+│   ├── buyer-controller-core/
+│   ├── seller-runtime-core/
+│   ├── postgres-store/
+│   ├── sqlite-store/
 │   └── transports/
 │       ├── local/
-│       ├── relay-local/
-│       ├── relay-lan/
+│       ├── relay-http/
 │       └── email/
 ├── docs/
+├── deploy/
+├── tests/
+├── scripts/
+├── site/
 ├── docker-compose.yml
 ├── Makefile
 └── package.json
@@ -41,9 +52,12 @@
 
 - `packages/contracts`：状态枚举、错误域、schema 常量、claims 约束
 - `packages/transports/local`：`L0` 本地运行时 transport（进程内队列 / 本机 IPC）
-- `packages/transports/relay-local`：`L1` 本地虚拟邮箱 / 本地 relay transport
-- `packages/transports/relay-lan`：`L2` 局域网 relay transport
+- `packages/transports/relay-http`：HTTP relay transport（当前已实现，供 `L0` supervisor 联调）
 - `packages/transports/email`：外部通道候选实现之一（Email MCP / 邮件桥 transport）
+- `packages/buyer-controller-core`：买家核心逻辑（状态机、超时、验签、平台客户端）
+- `packages/seller-runtime-core`：卖家运行时核心（队列、执行器、签名、心跳）
+- `packages/postgres-store`：PostgreSQL 快照持久化
+- `packages/sqlite-store`：SQLite 快照持久化
 
 共享约束：
 
@@ -54,9 +68,9 @@
 ## 4.1 运行模式与装配关系
 
 - `L0 = apps/* + packages/contracts + packages/transports/local`
-- `L1 = L0 + packages/transports/relay-local`
-- `L2 = L0 + packages/transports/relay-lan`
-- `L3 = L0 + packages/transports/email`
+- `L1 = L0 + packages/transports/relay-http`（或后续本地 relay）
+- `L2 = L0 + LAN relay transport`（后续）
+- `L3 = L0 + packages/transports/email`（或 HTTP/Webhook）
 
 后续若补 transport mode 装配，建议通过统一配置切换，例如：
 
@@ -80,8 +94,6 @@
   - 时序图、状态图、RBAC 图
 - `docs/checklists/`
   - 评审清单、联调清单、准入清单
-- `docs/issues/`
-  - 讨论记录、评审遗留、阶段性问题沉淀
 
 当前主要缺口不在存储结构本身，而在“transport / mode 演进文档”的显式归位。建议后续如新增独立文档，优先放在：
 
@@ -128,6 +140,6 @@
 - 集成测试：`npm run test:integration`
 - E2E：`npm run test:e2e`
 - Vitest Web UI：`npm run test:e2e:ui`
-- 流程图问题面板：`npm run test:flow:dashboard` 后访问 `site/test-flow-dashboard.html`
+- 流程图问题面板：`npm run test:flow:dashboard` 后访问 `site/protocol-playground.html`
 
 E2E 运行后会生成 `tests/reports/latest.json`，用于将问题按 `flow_step_id` 映射到时序图。

@@ -6,20 +6,10 @@ import {
   createPlatformState,
   hydratePlatformState,
   serializePlatformState
-} from "../../apps/platform-api/src/server.js";
-import {
-  createBuyerControllerServer,
-  createBuyerState,
-  hydrateBuyerState,
-  serializeBuyerState
-} from "../../packages/buyer-controller-core/src/index.js";
-import {
-  createSellerControllerServer,
-  createSellerState,
-  hydrateSellerState,
-  serializeSellerState
-} from "../../packages/seller-runtime-core/src/index.js";
-import { createPostgresSnapshotStore } from "../../packages/postgres-store/src/index.js";
+} from "@croc/platform-api";
+import { createBuyerControllerServer, createBuyerState, hydrateBuyerState, serializeBuyerState } from "@croc/buyer-controller-core";
+import { createPostgresSnapshotStore } from "@croc/postgres-store";
+import { createSellerControllerServer, createSellerState, hydrateSellerState, serializeSellerState } from "@croc/seller-runtime-core";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
 function createMemoryPool() {

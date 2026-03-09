@@ -17,8 +17,13 @@
 - `npm run test:integration`
 - `npm run test:e2e`
 - `npm run test:e2e:ui`（Vitest Web UI）
+- `npm run test:deploy:config`
+- `npm run test:smoke:platform`
+- `npm run test:smoke:buyer`
+- `npm run test:smoke:seller`
+- `npm run test:compose-smoke`
 
 ## 流程图反馈
 
 `npm run test:e2e` 会写出 `tests/reports/latest.json`，可在
-`site/test-flow-dashboard.html` 中加载并把问题映射到时序图步骤编号（如 `F1-F1`）。
+`site/protocol-playground.html` 中加载并把问题映射到时序图步骤编号（如 `F1-F1`）。

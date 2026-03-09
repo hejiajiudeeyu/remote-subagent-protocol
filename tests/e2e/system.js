@@ -1,7 +1,7 @@
-import { createBuyerControllerServer } from "../../apps/buyer-controller/src/server.js";
-import { createPlatformServer, createPlatformState } from "../../apps/platform-api/src/server.js";
-import { createSellerControllerServer, createSellerState } from "../../apps/seller-controller/src/server.js";
-import { createLocalTransportAdapter, createLocalTransportHub } from "../../packages/transports/local/src/index.js";
+import { createBuyerControllerServer } from "@croc/buyer-controller";
+import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
+import { createLocalTransportAdapter, createLocalTransportHub } from "@croc/transport-local";
 import { closeServer, listenServer } from "../helpers/http.js";
 
 export async function startSystem() {
@@ -16,11 +16,19 @@ export async function startSystem() {
   const buyerServer = createBuyerControllerServer({
     serviceName: "buyer-controller-e2e",
     transport: buyerTransport,
+    platform: {
+      baseUrl: platformUrl
+    },
     config: {
       timeout_confirmation_mode: "ask_by_default",
       hard_timeout_auto_finalize: true,
       poll_interval_active_s: 1,
       poll_interval_backoff_s: 1
+    },
+    background: {
+      enabled: true,
+      inboxPollIntervalMs: 25,
+      eventsSyncIntervalMs: 25
     }
   });
   const sellerServer = createSellerControllerServer({
@@ -35,7 +43,11 @@ export async function startSystem() {
       sellerId: bootstrapSeller.seller_id,
       subagentIds: [bootstrapSeller.subagent_id],
       signing: bootstrapSeller.signing
-    })
+    }),
+    background: {
+      enabled: true,
+      inboxPollIntervalMs: 25
+    }
   });
   const buyerUrl = await listenServer(buyerServer);
   const sellerUrl = await listenServer(sellerServer);

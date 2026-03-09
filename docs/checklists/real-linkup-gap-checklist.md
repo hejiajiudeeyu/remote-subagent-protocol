@@ -7,7 +7,7 @@
 - [x] 三端服务可独立启动（Platform / Buyer Controller / Seller Controller）
 - [x] in-process E2E 四类场景（成功、超时、token 过期、结果不合规）
 - [x] TUI 反馈（Vitest）
-- [x] Web UI 反馈（`site/test-flow-dashboard.html`）
+- [x] Web UI 反馈（`site/protocol-playground.html`）
 - [x] 流程图步骤映射报告（`tests/reports/latest.json`）
 - [x] Docker Compose 真实进程冒烟脚本（`tests/smoke/compose-smoke.mjs`）
 - [x] 邮件通道替身集成测试（`tests/integration/email-transport.integration.test.js`）

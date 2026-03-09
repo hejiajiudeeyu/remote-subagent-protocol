@@ -39,6 +39,10 @@
 - [OpenClaw 适配指南](docs/openclaw-adapter.md)
 - [架构图索引](docs/diagrams/README.md)
 - [研发追踪](docs/l0/development-tracker.md)
+- [部署指南](docs/deployment-guide.md)
+- [Release 兼容矩阵](docs/releases/compatibility-matrix.md)
+- [L0 收尾清单](docs/l0/l0-closeout-checklist.md)
+- [Release 流程](docs/release-process.md)
 - [协议 Playground](site/protocol-playground.html)
 
 ## 参考实现
@@ -49,12 +53,55 @@
 - [Contracts Package](packages/contracts)
 - [Transport Packages](packages/transports)
 
-## 运行与测试
+## 终端用户 Ops 客户端
+
+- `npm run ops -- setup`：初始化统一本地客户端，配置写入 `~/.remote-subagent`
+- `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080`：注册 buyer API key
+- `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`：接入一个本地 seller subagent
+- `npm run ops -- remove-subagent --subagent-id local.echo.v1`：从 seller 端本地删除一个 subagent
+- `npm run ops -- disable-subagent --subagent-id local.echo.v1`：在 seller 端本地禁用一个 subagent
+- `npm run ops -- enable-subagent --subagent-id local.echo.v1`：重新启用一个已禁用的本地 subagent
+- `npm run ops -- submit-review`：提交当前本地 seller subagent 的平台审批
+- `npm run ops -- enable-seller`：在本地启用 seller runtime
+- `npm run ops -- start`：启动本地 supervisor、buyer 和 relay
+- `npm run ops -- doctor`：检查本地 runtime 与 adapter 状态
+- `npm run ops -- debug-snapshot`：导出包含最近事件与日志尾部的本地调试快照
+
+## 仓库开发与测试命令
 
 - `npm run test:unit`
 - `npm run test:integration`
 - `npm run test:e2e`
 - `npm run test:compose-smoke`
+
+## Web 控制台
+
+- `npm run dev:ops-console`：buyer / seller 共用用户控制台
+- `npm run dev:platform-console`：平台管理控制台（使用 `PLATFORM_ADMIN_API_KEY`）
+- `ops-console` 已包含 setup wizard、请求 timeline / result 面板、runtime alerts 和本地 debug snapshot
+- `platform-console` 已包含 reviewer guidance、review/audit 历史摘要，以及基于 reviewer notes 的 approve / reject / disable 操作
+
+## 部署入口
+
+- 终端用户安装 buyer / seller 的主路径：`npx @croc/ops setup -> auth register -> add-subagent -> submit-review -> enable-seller -> start`
+- 完整终端用户步骤与排障说明见 [deploy/ops](deploy/ops)
+- 终端用户本地日志默认写入 `~/.remote-subagent/logs`，`ops-console` 通过 supervisor 读取这些日志
+- Docker / Compose 继续主要用于 platform、relay、CI、本地联调和高级独立部署
+- `make deploy-platform`：独立部署 `platform-api` + PostgreSQL
+- `make deploy-ops`：统一用户端分发入口（默认 buyer，seller 按需开启）
+- `make deploy-relay`：独立部署共享 transport relay
+- `make deploy-buyer`：独立部署 `buyer-controller`
+- `make deploy-seller`：独立部署 `seller-controller`
+- `make deploy-all`：单机联调整套系统
+
+部署目录位于：
+
+- [deploy/platform](deploy/platform)
+- [deploy/ops](deploy/ops)
+- [deploy/relay](deploy/relay)
+- [deploy/buyer](deploy/buyer)
+- [deploy/seller](deploy/seller)
+- [deploy/all-in-one](deploy/all-in-one)
 
 ## 许可证
 
