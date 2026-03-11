@@ -50,7 +50,11 @@ def configure_env() -> dict[str, str]:
 
     env.setdefault("BOOTSTRAP_SELLER_ID", "seller_foxlab")
     env.setdefault("BOOTSTRAP_SUBAGENT_ID", "foxlab.text.classifier.v1")
-    env.setdefault("BOOTSTRAP_DELIVERY_ADDRESS", "local://relay/seller_foxlab/foxlab.text.classifier.v1")
+    # Bootstrap seller task endpoint. Platform maps this into delivery_meta.task_delivery.address.
+    env.setdefault(
+        "BOOTSTRAP_TASK_DELIVERY_ADDRESS",
+        "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+    )
     env.setdefault("SELLER_ID", env["BOOTSTRAP_SELLER_ID"])
     env.setdefault("SUBAGENT_IDS", env["BOOTSTRAP_SUBAGENT_ID"])
     if env.get("BOOTSTRAP_SELLER_PUBLIC_KEY_PEM"):
@@ -195,7 +199,7 @@ def service_specs(env: dict[str, str]) -> list[dict[str, object]]:
                 "BUYER_PLATFORM_API_KEY": env.get("BUYER_PLATFORM_API_KEY", ""),
                 "BOOTSTRAP_SELLER_ID": env["BOOTSTRAP_SELLER_ID"],
                 "BOOTSTRAP_SUBAGENT_ID": env["BOOTSTRAP_SUBAGENT_ID"],
-                "BOOTSTRAP_DELIVERY_ADDRESS": env["BOOTSTRAP_DELIVERY_ADDRESS"],
+                "BOOTSTRAP_TASK_DELIVERY_ADDRESS": env["BOOTSTRAP_TASK_DELIVERY_ADDRESS"],
                 "BOOTSTRAP_SELLER_API_KEY": env.get("BOOTSTRAP_SELLER_API_KEY", ""),
                 "BOOTSTRAP_SELLER_PUBLIC_KEY_PEM": env.get("BOOTSTRAP_SELLER_PUBLIC_KEY_PEM", ""),
                 "BOOTSTRAP_SELLER_PRIVATE_KEY_PEM": env.get("BOOTSTRAP_SELLER_PRIVATE_KEY_PEM", ""),

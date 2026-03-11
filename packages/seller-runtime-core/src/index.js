@@ -126,10 +126,12 @@ function buildResultTiming(task) {
 
 function buildBaseResultPayload(task) {
   return {
+    message_type: "remote_subagent_result",
     request_id: task.request_id,
     result_version: "0.1.0",
     seller_id: task.seller_id,
     subagent_id: task.subagent_id,
+    verification: task.verification || null,
     timing: buildResultTiming(task)
   };
 }
@@ -190,7 +192,75 @@ function buildResultPayload(task, execution) {
     ...buildBaseResultPayload(task),
     status: "ok",
     output: "output" in execution ? execution.output : null,
+    artifacts: sanitizeArtifactsForResult(execution.artifacts),
     schema_valid: execution.schema_valid !== false,
+    usage: execution.usage || { tokens_in: 0, tokens_out: 0 }
+  };
+}
+
+function normalizeArtifactContent(artifact) {
+  if (Buffer.isBuffer(artifact?.content)) {
+    return artifact.content;
+  }
+  if (artifact?.content_base64) {
+    return Buffer.from(artifact.content_base64, "base64");
+  }
+  if (typeof artifact?.content === "string") {
+    return Buffer.from(artifact.content, "utf8");
+  }
+  return Buffer.alloc(0);
+}
+
+function materializeArtifacts(executionArtifacts = []) {
+  return (Array.isArray(executionArtifacts) ? executionArtifacts : []).map((artifact, index) => {
+    const content = normalizeArtifactContent(artifact);
+    return {
+      artifact_id: artifact?.artifact_id || `art_${index + 1}`,
+      name: artifact?.name || `artifact-${index + 1}.bin`,
+      media_type: artifact?.media_type || "application/octet-stream",
+      byte_size: content.length,
+      sha256: crypto.createHash("sha256").update(content).digest("hex"),
+      delivery: {
+        kind: "email_attachment"
+      },
+      content_base64: content.toString("base64")
+    };
+  });
+}
+
+function applyExecutionArtifacts(task, execution = {}) {
+  if (!execution || typeof execution !== "object") {
+    return execution;
+  }
+  if (!Array.isArray(execution.artifacts) || execution.artifacts.length === 0) {
+    return execution;
+  }
+  return {
+    ...execution,
+    artifacts: materializeArtifacts(execution.artifacts)
+  };
+}
+
+function sanitizeArtifactsForResult(artifacts = []) {
+  return (Array.isArray(artifacts) ? artifacts : []).map(({ content_base64, ...artifact }) => artifact);
+}
+
+function enforceArtifactSizeLimit(task, execution = {}) {
+  const maxAttachmentBytes = Number(process.env.EMAIL_MAX_ATTACHMENT_BYTES || 5 * 1024 * 1024);
+  const artifacts = Array.isArray(execution.artifacts) ? execution.artifacts : [];
+  const totalBytes = artifacts.reduce((sum, artifact) => sum + Number(artifact.byte_size || 0), 0);
+  if (totalBytes <= maxAttachmentBytes) {
+    return execution;
+  }
+
+  return {
+    status: "error",
+    error: {
+      code: "RESULT_ARTIFACT_TOO_LARGE",
+      message: `artifact payload exceeds email limit ${maxAttachmentBytes} bytes`,
+      retryable: false
+    },
+    schema_valid: true,
     usage: execution.usage || { tokens_in: 0, tokens_out: 0 }
   };
 }
@@ -207,7 +277,7 @@ function signResultPayload(payload, state) {
 }
 
 async function sendResultEnvelope(task, state, transport) {
-  const target = task.return_route || task.reply_to;
+  const target = task.result_delivery?.address || task.return_route || task.reply_to;
   if (!transport || !target || !task.result_package) {
     return;
   }
@@ -221,6 +291,14 @@ async function sendResultEnvelope(task, state, transport) {
     request_id: task.request_id,
     seller_id: state.identity.seller_id,
     subagent_id: task.subagent_id,
+    verification: task.verification || null,
+    body_text: JSON.stringify(task.result_package),
+    attachments: ((task.execution_artifacts || []) || []).map((artifact) => ({
+      name: artifact.name,
+      media_type: artifact.media_type,
+      content_base64: artifact.content_base64,
+      byte_size: artifact.byte_size
+    })),
     result_package: task.result_package,
     sent_at: nowIso()
   });
@@ -239,6 +317,26 @@ async function ackPlatform(task, platform) {
       seller_id: platform.sellerId || task.seller_id,
       subagent_id: task.subagent_id,
       eta_hint_s: Math.max(1, Math.ceil(task.delay_ms / 1000))
+    }
+  });
+
+  return { ok: response.status >= 200 && response.status < 300, response };
+}
+
+async function postRequestLifecycleEvent(task, platform, eventType, detail = {}) {
+  if (!platform?.baseUrl || !platform.apiKey) {
+    return { ok: false, skipped: true };
+  }
+
+  const response = await postJson(platform.baseUrl, `/v1/requests/${task.request_id}/events`, {
+    headers: {
+      Authorization: `Bearer ${platform.apiKey}`
+    },
+    body: {
+      seller_id: platform.sellerId || task.seller_id,
+      subagent_id: task.subagent_id,
+      event_type: eventType,
+      ...detail
     }
   });
 
@@ -302,6 +400,8 @@ function createTaskRecord(input, state, overrides = {}) {
     enqueued_at: acceptedAt,
     updated_at: acceptedAt,
     result_package: null,
+    result_delivery: overrides.result_delivery ?? input.result_delivery ?? null,
+    verification: overrides.verification ?? input.verification ?? null,
     return_route: overrides.return_route ?? input.return_route ?? null,
     reply_to: overrides.reply_to ?? input.reply_to ?? null,
     thread_id: overrides.thread_id ?? input.thread_id ?? `req:${requestId}`,
@@ -391,11 +491,29 @@ function validateTaskGuardrails(task, { executor, guardrails = {} } = {}) {
 }
 
 async function finalizeTask(task, state, transport, platform, execution) {
+  const executionWithArtifacts = enforceArtifactSizeLimit(task, applyExecutionArtifacts(task, execution));
   task.status = "COMPLETED";
   task.completed_at = nowIso();
   task.updated_at = task.completed_at;
-  task.result_package = signResultPayload(buildResultPayload(task, execution), state);
+  task.execution_artifacts = Array.isArray(executionWithArtifacts.artifacts) ? executionWithArtifacts.artifacts : [];
+  task.result_package = signResultPayload(buildResultPayload(task, executionWithArtifacts), state);
   await sendResultEnvelope(task, state, transport);
+  const lifecycleEvent =
+    task.result_package.status === "ok"
+      ? { eventType: "COMPLETED", detail: { status: "ok", finished_at: task.completed_at } }
+      : {
+          eventType: "FAILED",
+          detail: {
+            status: "error",
+            error_code: task.result_package.error?.code || "EXEC_UNKNOWN",
+            finished_at: task.completed_at
+          }
+        };
+  try {
+    await postRequestLifecycleEvent(task, platform, lifecycleEvent.eventType, lifecycleEvent.detail);
+  } catch {
+    // Completion events are observational only and must not invalidate result delivery.
+  }
   await reportSellerMetric(
     platform,
     task,
@@ -629,7 +747,9 @@ async function processSellerInbox(state, {
       {
         return_route: envelope.from || null,
         reply_to: envelope.from || "buyer-controller",
-        thread_id: envelope.thread_id || `req:${envelope.request_id}`
+        thread_id: envelope.thread_id || `req:${envelope.request_id}`,
+        result_delivery: envelope.result_delivery || null,
+        verification: envelope.verification || null
       }
     );
 
@@ -861,7 +981,7 @@ export function createSellerControllerServer({
             subagent_id: subagentId,
             display_name: body.display_name || `${sellerId} ${subagentId}`,
             template_ref: body.template_ref || `${subagentId}@v1`,
-            delivery_address: body.delivery_address || `local://relay/${sellerId}/${subagentId}`,
+            task_delivery_address: body.task_delivery_address || `local://relay/${sellerId}/${subagentId}`,
             seller_public_key_pem: state.signing.publicKeyPem,
             task_types: body.task_types || [],
             capabilities: body.capabilities || [],

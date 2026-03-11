@@ -419,12 +419,13 @@ describe("seller-controller integration", () => {
         const polled = await jsonRequest(platformUrl, `/v1/requests/${requestId}/events`, {
           headers: authHeader
         });
-        if (!polled.body.events.some((event) => event.event_type === "ACKED")) {
-          throw new Error("ack_not_ready");
+        if (!polled.body.events.some((event) => event.event_type === "COMPLETED")) {
+          throw new Error("completed_not_ready");
         }
         return polled;
       });
       expect(events.body.events.some((event) => event.event_type === "ACKED")).toBe(true);
+      expect(events.body.events.some((event) => event.event_type === "COMPLETED")).toBe(true);
 
       const buyerQueue = await waitFor(async () => {
         const polled = await buyerTransport.peek();
@@ -437,6 +438,89 @@ describe("seller-controller integration", () => {
       expect(buyerQueue.items[0].request_id).toBe(requestId);
     } finally {
       await closeServer(autoSellerServer);
+      await closeServer(platformServer);
+    }
+  });
+
+  it("reports FAILED event to platform when execution returns error", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-failed-event-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const hub = createLocalTransportHub();
+    const seller = platformState.bootstrap.sellers[0];
+    const transport = createLocalTransportAdapter({ hub, receiver: seller.seller_id });
+    const buyerTransport = createLocalTransportAdapter({ hub, receiver: "buyer-controller" });
+    const sellerServer = createSellerControllerServer({
+      serviceName: "seller-controller-failed-event-test",
+      transport,
+      platform: {
+        baseUrl: platformUrl,
+        apiKey: seller.api_key,
+        sellerId: seller.seller_id
+      }
+    });
+    const sellerUrl = await listenServer(sellerServer);
+
+    try {
+      const registered = await jsonRequest(platformUrl, "/v1/users/register", {
+        method: "POST",
+        body: { contact_email: "seller-failed@test.local" }
+      });
+      const authHeader = { Authorization: `Bearer ${registered.body.api_key}` };
+      const requestId = "req_seller_failed_event_1";
+
+      const issued = await jsonRequest(platformUrl, "/v1/tokens/task", {
+        method: "POST",
+        headers: authHeader,
+        body: {
+          request_id: requestId,
+          seller_id: seller.seller_id,
+          subagent_id: seller.subagent_id
+        }
+      });
+      expect(issued.status).toBe(201);
+
+      await transport.send({
+        message_id: "msg_task_failed_1",
+        from: "buyer-controller",
+        to: seller.seller_id,
+        request_id: requestId,
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: issued.body.task_token,
+        simulate: "token_expired",
+        delay_ms: 20
+      });
+
+      const pulled = await jsonRequest(sellerUrl, "/controller/inbox/pull", {
+        method: "POST",
+        body: {}
+      });
+      expect(pulled.status).toBe(200);
+
+      const events = await waitFor(async () => {
+        const polled = await jsonRequest(platformUrl, `/v1/requests/${requestId}/events`, {
+          headers: authHeader
+        });
+        if (!polled.body.events.some((event) => event.event_type === "FAILED")) {
+          throw new Error("failed_not_ready");
+        }
+        return polled;
+      });
+      expect(events.body.events.some((event) => event.event_type === "ACKED")).toBe(true);
+      const failedEvent = events.body.events.find((event) => event.event_type === "FAILED");
+      expect(failedEvent.error_code).toBe("AUTH_TOKEN_EXPIRED");
+
+      const buyerQueue = await waitFor(async () => {
+        const polled = await buyerTransport.peek();
+        if (polled.items.length === 0) {
+          throw new Error("buyer_failed_result_not_ready");
+        }
+        return polled;
+      });
+      expect(buyerQueue.items[0].result_package.status).toBe("error");
+    } finally {
+      await closeServer(sellerServer);
       await closeServer(platformServer);
     }
   });

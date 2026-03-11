@@ -13,7 +13,7 @@
   - 合约构建入口：`template_ref`
   - 增强项：`capabilities[]`、`supported_task_types[]`、`version`、`sla_hint.*`、`eta_hint.*`
   - 搜索增强（仅 future search 模式）：`score`、`match_reasons`、`score_breakdown`
-- `delivery_address` 等通信元数据不在目录批量接口返回；在 D 阶段按单次请求下发。
+- `task_delivery/result_delivery/verification` 等通信元数据不在目录批量接口返回；在 D 阶段按单次请求下发。
 
 ### C 阶段：Template 从哪来
 
@@ -28,7 +28,7 @@
 - 规范锚点：`../l0/platform-api-v0.1.md` §6.1。
 - Buyer 在 `POST /v1/tokens/task` 成功后调用：
   - `POST /v1/requests/{request_id}/delivery-meta`
-- 平台按 `request_id + seller_id + subagent_id (+ buyer_id)` 单次下发 `delivery_address/thread_hint`。
+- 平台按 `request_id + seller_id + subagent_id (+ buyer_id)` 单次下发 `task_delivery/result_delivery/verification`。
 
 ### Buyer Agent 轮询接口（内部）
 
@@ -38,6 +38,13 @@
 - Buyer Agent 在超时询问时通过内部接口写入决策：
   - `POST /controller/requests/{request_id}/timeout-decision`（`continue_wait=true/false`）
 - 该接口不属于平台对外 API。
+- 当前参考实现里，`GET /controller/catalog/subagents` 的 HTTP 响应本身就是 `Buyer Controller -> Buyer Agent/调用方` 的“返回候选列表”步骤；图中应显式画出，避免误读为 Buyer 未收到查询结果就直接做选择。
+
+### 平台事件与最终结果真值
+
+- 当前最小实现中，Seller 会向平台写入 `ACKED`、`COMPLETED`、`FAILED` 等控制面事件。
+- Buyer 轮询平台事件主要用于观测 ACK/完成态和辅助超时管理。
+- Buyer 的最终验收真值仍来自 transport 回传的 `result_package` 及本地验签/校验，而不是平台事件本身。
 
 ### 通信层实现（MCP 只是通道实现之一）
 
@@ -173,7 +180,7 @@ sequenceDiagram
             BA-->>BA: [D2-F4] 不进入后续阶段
         end
     else delivery-meta成功
-        P-->>BC: [D2-RES] 返回通信元数据（delivery_address/thread_hint）
+        P-->>BC: [D2-RES] 返回通信元数据（task_delivery/result_delivery/verification）
     end
 
     BC->>BTA: [E1-REQ] 发送任务请求（request_id/thread_hint 语义）
@@ -268,6 +275,8 @@ sequenceDiagram
                                 DC->>BTA: [G6-S2] 投递结果包
                                 BTA-->>BC: [G6-S3] 收到结果包
                             end
+                            SC->>P: [G7-REQ] POST /v1/requests/{request_id}/events (COMPLETED/FAILED)
+                            P-->>SC: [G7-RES] accepted
                         end
                     end
                 end

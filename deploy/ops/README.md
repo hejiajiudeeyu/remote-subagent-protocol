@@ -43,3 +43,4 @@ Notes:
 - Use `BUYER_PLATFORM_API_KEY` after registering the buyer account
 - user-facing setup should prefer the unified `ops` supervisor instead of directly managing `seller-controller`
 - The intended UX is a single user console where buyer is default and seller is an opt-in role
+- Current protocol baseline uses request-scoped `delivery-meta` with `task_delivery` and `result_delivery`; email-mode results are pure JSON bodies with optional signed artifact metadata

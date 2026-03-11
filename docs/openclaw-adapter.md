@@ -196,7 +196,7 @@ OpenClaw 用户侧应允许这种自然语言：
 
 - `request_id`
 - `task_token`
-- `delivery_address`
+- `task_delivery.address`
 - `thread_hint`
 - `seller_public_key_pem`
 

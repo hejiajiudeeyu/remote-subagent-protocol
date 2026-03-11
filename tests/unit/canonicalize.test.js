@@ -44,6 +44,9 @@ describe("canonicalizeResultPackageForSignature (extended)", () => {
       subagent_id: "a1",
       status: "ok",
       output: {},
+      message_type: "remote_subagent_result",
+      verification: { display_code: "CODE123" },
+      artifacts: [{ name: "report.pdf", sha256: "abc" }],
       error: null,
       timing: { elapsed_ms: 5 },
       usage: { tokens_in: 1, tokens_out: 1 },
@@ -55,7 +58,7 @@ describe("canonicalizeResultPackageForSignature (extended)", () => {
     });
 
     expect(Object.keys(result).sort()).toEqual(
-      ["error", "output", "request_id", "result_version", "seller_id", "status", "subagent_id", "timing", "usage"]
+      ["artifacts", "error", "message_type", "output", "request_id", "result_version", "seller_id", "status", "subagent_id", "timing", "usage", "verification"]
     );
   });
 

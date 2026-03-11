@@ -219,14 +219,15 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
       return response.body;
     },
 
-    async getDeliveryMeta({ requestId, sellerId, subagentId, taskToken }) {
+    async getDeliveryMeta({ requestId, sellerId, subagentId, taskToken, resultDelivery }) {
       const response = await requestJson(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
         method: "POST",
         headers: authHeaders(true),
         body: {
           seller_id: sellerId,
           subagent_id: subagentId,
-          task_token: taskToken
+          task_token: taskToken,
+          result_delivery: resultDelivery
         }
       });
 
@@ -354,13 +355,86 @@ export function createRequestRecord(config, body) {
       hard_timeout_auto_finalize: config.hard_timeout_auto_finalize
     },
     task_token: body.task_token || null,
+    result_delivery: body.result_delivery || { kind: "local", address: "buyer-controller" },
+    verification: body.verification || null,
     delivery_meta: body.delivery_meta || null,
     platform_events: [],
+    platform_completed_at: null,
+    platform_failed_at: null,
+    platform_last_event: null,
     result_package: null,
     contract_draft: body.contract_draft || null,
     last_error_code: null,
     metric_flags: {}
   };
+}
+
+function getTaskDelivery(request, body = {}) {
+  return request.delivery_meta?.task_delivery || body.task_delivery || null;
+}
+
+function getResultDelivery(request, body = {}) {
+  return request.delivery_meta?.result_delivery || body.result_delivery || request.result_delivery || null;
+}
+
+function extractEmailResult(envelope) {
+  if (!envelope || typeof envelope !== "object") {
+    return { resultPackage: null, attachments: [], parseError: false };
+  }
+
+  if (envelope.result_package || envelope.payload?.result_package) {
+    return {
+      resultPackage: envelope.result_package || envelope.payload?.result_package,
+      attachments: envelope.attachments || envelope.payload?.attachments || [],
+      parseError: false
+    };
+  }
+
+  if (typeof envelope.body_text === "string" && envelope.body_text.trim()) {
+    try {
+      return {
+        resultPackage: JSON.parse(envelope.body_text),
+        attachments: envelope.attachments || [],
+        parseError: false
+      };
+    } catch {
+      return { resultPackage: null, attachments: envelope.attachments || [], parseError: true };
+    }
+  }
+
+  return {
+    resultPackage: envelope.payload?.request_id ? envelope.payload : null,
+    attachments: envelope.attachments || [],
+    parseError: false
+  };
+}
+
+function verifyArtifactBindings(body, attachments = []) {
+  const declared = Array.isArray(body.artifacts) ? body.artifacts : [];
+  if (declared.length === 0) {
+    return attachments.length === 0;
+  }
+
+  for (const artifact of declared) {
+    const attachment = attachments.find((item) => item.name === artifact.name);
+    if (!attachment) {
+      return false;
+    }
+    if (artifact.media_type && attachment.media_type !== artifact.media_type) {
+      return false;
+    }
+    if (Number.isFinite(Number(artifact.byte_size)) && Number(artifact.byte_size) !== Number(attachment.byte_size)) {
+      return false;
+    }
+    if (artifact.sha256) {
+      const digest = crypto.createHash("sha256").update(Buffer.from(attachment.content_base64 || "", "base64")).digest("hex");
+      if (digest !== artifact.sha256) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 function markUpdated(request, event) {
@@ -395,6 +469,10 @@ function resultContextMatchesRequest(request, body) {
     return false;
   }
 
+  if (request.verification?.display_code && body.verification?.display_code !== request.verification.display_code) {
+    return false;
+  }
+
   return true;
 }
 
@@ -417,7 +495,7 @@ function verifyResultSignature(request, body) {
   }
 }
 
-export function applyResultPackage(request, body) {
+export function applyResultPackage(request, body, { attachments = [] } = {}) {
   request.result_package = body;
 
   if (!resultContextMatchesRequest(request, body)) {
@@ -435,6 +513,17 @@ export function applyResultPackage(request, body) {
     request.status = "UNVERIFIED";
     request.last_error_code = "RESULT_SIGNATURE_INVALID";
     markUpdated(request, "RESULT_SIGNATURE_INVALID");
+    return {
+      status: request.status,
+      eventType: "buyer.request.unverified",
+      code: request.last_error_code
+    };
+  }
+
+  if (!verifyArtifactBindings(body, attachments)) {
+    request.status = "UNVERIFIED";
+    request.last_error_code = "RESULT_ARTIFACT_INVALID";
+    markUpdated(request, "RESULT_ARTIFACT_INVALID");
     return {
       status: request.status,
       eventType: "buyer.request.unverified",
@@ -532,7 +621,19 @@ async function pollBuyerInbox(
   let mutated = false;
 
   for (const envelope of polled.items) {
-    const resultPackage = envelope.result_package || envelope.payload?.result_package || envelope.payload;
+    const { resultPackage, attachments, parseError } = extractEmailResult(envelope);
+    if (!resultPackage?.request_id && parseError && envelope.request_id) {
+      const request = state.requests.get(envelope.request_id);
+      if (request && !TERMINAL_STATUS_SET.has(request.status)) {
+        request.status = "UNVERIFIED";
+        request.last_error_code = "RESULT_BODY_INVALID_JSON";
+        markUpdated(request, "RESULT_BODY_INVALID_JSON");
+        mutated = true;
+      }
+      await transport.ack(envelope.message_id, { receiver });
+      accepted.push({ message_id: envelope.message_id, request_id: envelope.request_id });
+      continue;
+    }
     if (!resultPackage?.request_id) {
       continue;
     }
@@ -544,7 +645,7 @@ async function pollBuyerInbox(
     const platformClient = typeof platformClientResolver === "function" ? platformClientResolver(request) : null;
 
     if (!TERMINAL_STATUS_SET.has(request.status)) {
-      const transition = applyResultPackage(request, resultPackage);
+      const transition = applyResultPackage(request, resultPackage, { attachments });
       if (transition?.eventType) {
         await reportBuyerMetric(platformClient, request, transition.eventType, { code: transition.code });
       }
@@ -670,7 +771,8 @@ export async function prepareBuyerRequest(request, platformClient, options = {})
     requestId: request.request_id,
     sellerId,
     subagentId,
-    taskToken: issued.task_token
+    taskToken: issued.task_token,
+    resultDelivery: options.result_delivery || options.resultDelivery || request.result_delivery
   });
 
   if (
@@ -684,6 +786,8 @@ export async function prepareBuyerRequest(request, platformClient, options = {})
   request.seller_id = sellerId;
   request.subagent_id = subagentId;
   request.task_token = issued.task_token;
+  request.result_delivery = deliveryMeta.result_delivery || request.result_delivery || null;
+  request.verification = deliveryMeta.verification || request.verification || null;
   request.delivery_meta = deliveryMeta;
   request.expected_signer_public_key_pem =
     request.expected_signer_public_key_pem || deliveryMeta.seller_public_key_pem || null;
@@ -699,8 +803,10 @@ export async function prepareBuyerRequest(request, platformClient, options = {})
 }
 
 export function buildDispatchEnvelope(request, body = {}) {
-  const deliveryAddress = request.delivery_meta?.delivery_address || body.delivery_address || request.seller_id;
-  const threadHint = request.delivery_meta?.thread_hint || `req:${request.request_id}`;
+  const taskDelivery = getTaskDelivery(request, body);
+  const resultDelivery = getResultDelivery(request, body);
+  const deliveryAddress = taskDelivery?.address || body.task_delivery_address || request.seller_id;
+  const threadHint = taskDelivery?.thread_hint || request.delivery_meta?.thread_hint || `req:${request.request_id}`;
 
   return {
     message_id: body.message_id || `msg_${crypto.randomUUID()}`,
@@ -712,6 +818,8 @@ export function buildDispatchEnvelope(request, body = {}) {
     seller_id: request.seller_id,
     subagent_id: request.subagent_id,
     task_token: body.task_token || request.task_token || null,
+    result_delivery: resultDelivery,
+    verification: request.verification || request.delivery_meta?.verification || null,
     payload: body.payload || {},
     simulate: body.simulate || "success",
     delay_ms: Number(body.delay_ms || 80),
@@ -725,8 +833,8 @@ export function createTaskContractDraft(request, body = {}) {
   const taskInput = body.task_input ?? body.input ?? request.task_input ?? {};
   const outputSchema = body.output_schema ?? request.output_schema ?? null;
   const taskType = body.task_type || request.task_type || null;
-  const returnRouteHint = body.return_route_hint || request.return_route_hint || null;
-  const threadHint = body.thread_hint || request.delivery_meta?.thread_hint || `req:${request.request_id}`;
+  const resultDelivery = body.result_delivery || getResultDelivery(request, body);
+  const threadHint = body.thread_hint || getTaskDelivery(request, body)?.thread_hint || `req:${request.request_id}`;
   const sourceRunId = body.source_run_id || request.source_run_id || null;
   const createdAt = body.created_at || nowIso();
   const constraints = {
@@ -757,8 +865,11 @@ export function createTaskContractDraft(request, body = {}) {
     }
   };
 
-  if (returnRouteHint) {
-    contract.buyer.return_route_hint = returnRouteHint;
+  if (resultDelivery) {
+    contract.buyer.result_delivery = resultDelivery;
+  }
+  if (request.verification || body.verification) {
+    contract.verification = body.verification || request.verification;
   }
   if (sourceRunId) {
     contract.trace.source_run_id = sourceRunId;
@@ -767,7 +878,7 @@ export function createTaskContractDraft(request, body = {}) {
   request.task_type = taskType;
   request.task_input = taskInput;
   request.output_schema = outputSchema;
-  request.return_route_hint = returnRouteHint;
+  request.result_delivery = resultDelivery;
   request.source_run_id = sourceRunId;
   request.contract_draft = contract;
   markUpdated(request, "CONTRACT_DRAFTED");
@@ -779,8 +890,13 @@ export async function syncBuyerRequestEvents(request, platformClient) {
   const response = await platformClient.getRequestEvents(request.request_id);
   const events = response.events || response.items || [];
   request.platform_events = events;
+  request.platform_last_event = events.length > 0 ? events[events.length - 1] : null;
 
   const ackEvent = events.find((event) => event.event_type === "ACKED");
+  const completedEvent = events.find((event) => event.event_type === "COMPLETED");
+  const failedEvent = events.find((event) => event.event_type === "FAILED");
+  request.platform_completed_at = completedEvent?.finished_at || completedEvent?.at || null;
+  request.platform_failed_at = failedEvent?.finished_at || failedEvent?.at || null;
   if (ackEvent && !TERMINAL_STATUS_SET.has(request.status) && request.status !== "ACKED") {
     request.status = "ACKED";
     request.last_error_code = null;

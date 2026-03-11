@@ -24,3 +24,5 @@ coverage/
 
 # Test artifacts
 tests/reports/latest.json
+
+_local_ref/

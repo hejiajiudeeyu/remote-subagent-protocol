@@ -22,6 +22,13 @@ This repository is the protocol source of truth and currently includes:
 - contract templates, schemas, diagrams, and integration guides
 - test suites for unit, integration, e2e, and compose smoke flows
 
+Current implemented result-delivery baseline:
+
+- platform issues request-scoped `delivery-meta` with both `task_delivery` and `result_delivery`
+- seller returns a pure JSON result body; buyer controller parses and verifies it before exposing it upstream
+- file outputs travel as attachments described by signed `artifacts[]` metadata
+- `platform_inbox` is reserved in the protocol but not implemented in the current runtime
+
 ## Repository Scope
 
 This repository is protocol-first. Implementation-specific product logic, distribution strategy, operational workflows, and other non-protocol concerns should live outside this repository and depend on this protocol source of truth instead of redefining it.

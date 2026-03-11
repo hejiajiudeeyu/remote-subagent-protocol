@@ -41,6 +41,7 @@
 
 ### 2.3 传输与会话增强
 - Email / SMTP / Webhook 的 subject、thread、header 规范
+- Email 结果邮件的 MIME/profile 扩展（当前实现已固定为“纯 JSON 正文 + 可选附件工件”）
 - 多 transport 节点发现、relay、mailbox namespace
 - 多轮对话 / 会话化交互
 
@@ -129,7 +130,19 @@ L0 不需要这些状态。
 - 现在不应该把它并入 L0 必做清单
 - 但现在就应该在术语和字段命名上避免堵死后续演进路径
 
-## 4. 推荐的近期迁移动作
+## 4. 仓库拆分
+
+L0 闭环稳定后，当前 monorepo 将拆分为三个独立仓库：
+
+| 仓库 | 职责 |
+| :--- | :--- |
+| `delegated-execution-protocol` | 协议定义（角色、对象模型、授权、合同、结果验证、版本兼容） |
+| `delegated-execution-client` | 终端用户统一客户端（buyer 主流程、seller 预置与启用、marketplace 接入） |
+| `delegated-execution-platform-selfhost` | 平台自部署方案（平台服务、部署配置、运维、监控） |
+
+拆分时机、依赖拓扑、共享包归属、预拆分准备及执行步骤的完整规划见 `design/repo-split-plan.md`。
+
+## 5. 推荐的近期迁移动作
 
 在 L0 主规范之外，后续能力建议按以下顺序恢复：
 
@@ -140,18 +153,18 @@ L0 不需要这些状态。
 5. 会话化多轮对话
 6. 人工复核与治理流程
 
-## 5. 对当前命名的建议
+## 6. 对当前命名的建议
 
 建议未来逐步收敛为两层命名：
 
-### 5.1 协议层
+### 6.1 协议层
 - Buyer
 - Buyer Agent（Local Agent）
 - Seller
 - Remote Subagent
 - Platform
 
-### 5.2 参考实现层
+### 6.2 参考实现层
 - Buyer Controller
 - Seller Controller
 - Seller Runtime Template

@@ -66,7 +66,11 @@ describe("postgres snapshot persistence", () => {
       headers: buyerAuth,
       body: {
         seller_id: seller.seller_id,
-        subagent_id: seller.subagent_id
+        subagent_id: seller.subagent_id,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
       }
     });
 

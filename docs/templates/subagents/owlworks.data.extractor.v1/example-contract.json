@@ -4,7 +4,10 @@
   "created_at": "2026-03-02T14:00:00Z",
   "buyer": {
     "buyer_id": "buyer_dataops",
-    "return_route_hint": "local://buyer-agent/inbox/dataops"
+    "result_delivery": {
+      "kind": "local",
+      "address": "buyer-controller"
+    }
   },
   "seller": {
     "seller_id": "seller_owlworks",

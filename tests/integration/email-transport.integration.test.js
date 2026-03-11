@@ -33,6 +33,37 @@ describe("email transport integration", () => {
     expect(replies[0].payload.type).toBe("result");
   });
 
+  it("supports generic send/poll/ack with JSON body and attachments", async () => {
+    const transport = new InMemoryEmailTransport({ minDelayMs: 0, maxDelayMs: 1 });
+    const sent = await transport.send({
+      request_id: "req_mail_generic_1",
+      thread_id: "thread_generic_1",
+      from: "seller@example.com",
+      to: "buyer@example.com",
+      type: "task.result",
+      body_text: JSON.stringify({ request_id: "req_mail_generic_1", status: "ok" }),
+      attachments: [
+        {
+          name: "report.txt",
+          media_type: "text/plain",
+          content: "hello attachment"
+        }
+      ]
+    });
+
+    const polled = await transport.poll({ receiver: "buyer@example.com" });
+    expect(polled.items).toHaveLength(1);
+    expect(polled.items[0].message_id).toBe(sent.message_id);
+    expect(polled.items[0].body_text).toContain("\"status\":\"ok\"");
+    expect(polled.items[0].attachments[0].name).toBe("report.txt");
+
+    const acked = await transport.ack(sent.message_id, { receiver: "buyer@example.com" });
+    expect(acked.acked).toBe(true);
+
+    const empty = await transport.poll({ receiver: "buyer@example.com" });
+    expect(empty.items).toHaveLength(0);
+  });
+
   it("can simulate duplicates", async () => {
     const transport = new InMemoryEmailTransport({ duplicateRate: 1 });
 

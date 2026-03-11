@@ -22,12 +22,15 @@ export function canonicalizeResultPackageForSignature(result = {}) {
   const canonical = {};
 
   for (const key of [
+    'message_type',
     'request_id',
     'result_version',
     'seller_id',
     'subagent_id',
+    'verification',
     'status',
     'output',
+    'artifacts',
     'error',
     'timing',
     'usage'

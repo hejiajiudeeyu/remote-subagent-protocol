@@ -60,7 +60,7 @@
 | `catalog_import_mode` | `on_demand_immediate` | FROZEN | 目录按需即时导入 |
 | `seller_subagent_binding_mode` | `platform_import_association` | FROZEN | subagent 与 seller 关系由平台导入时建立 |
 | `template_delivery_mode` | `platform_api_bundle` | FROZEN | Buyer 通过平台 API 拉取模板包，不直接读取仓库目录 |
-| `catalog_expose_delivery_address` | `false` | FROZEN | 目录批量查询不返回投递地址 |
+| `catalog_expose_task_delivery_address` | `false` | FROZEN | 目录批量查询不返回 request-scoped `task_delivery/result_delivery` |
 | `delivery_meta_mode` | `request_scoped` | FROZEN | 通过 `POST /v1/requests/{request_id}/delivery-meta` 单次下发 |
 | `delivery_meta_ttl_seconds` | `300` | FROZEN | 投递元数据有效期（与 token TTL 对齐） |
 
@@ -110,7 +110,7 @@
 - `catalog_import_mode=on_demand_immediate`
 - `platform_storage_backend=PostgreSQL`
 - `seller_subagent_binding_mode=platform_import_association`
-- `catalog_expose_delivery_address=false`
+- `catalog_expose_task_delivery_address=false`
 - `delivery_meta_mode=request_scoped`
 - `delivery_meta_ttl_seconds=300`
 - `api_auth_mode=api_key`
@@ -126,7 +126,7 @@
 - `TOKEN_TTL_SECONDS=300`
 - `BOOTSTRAP_SELLER_ID=seller_...`
 - `BOOTSTRAP_SUBAGENT_ID=subagent.namespace.v1`
-- `BOOTSTRAP_DELIVERY_ADDRESS=local://relay/...`
+- `BOOTSTRAP_TASK_DELIVERY_ADDRESS=local://relay/...`（seller task endpoint，platform 会在 `delivery-meta` 中映射为 `task_delivery.address`）
 - `BOOTSTRAP_SELLER_API_KEY=...`
 - `BOOTSTRAP_SELLER_PUBLIC_KEY_PEM=...`
 - `BOOTSTRAP_SELLER_PRIVATE_KEY_PEM=...`

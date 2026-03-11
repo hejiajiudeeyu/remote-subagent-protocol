@@ -36,7 +36,7 @@ sequenceDiagram
     BC->>P: POST /v1/tokens/task
     P-->>BC: task token
     BC->>P: POST /v1/requests/{request_id}/delivery-meta
-    P-->>BC: delivery_address + thread_hint + seller_public_key_pem
+    P-->>BC: task_delivery + result_delivery + verification + seller_public_key_pem
     BC-->>BA: prepared request
 
     BA->>BC: POST /controller/requests/{request_id}/dispatch

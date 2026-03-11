@@ -176,8 +176,8 @@ Query 参数：
 
 说明（可扩展性）：
 - 当前建议优先使用遍历/分类过滤。
-- `delivery_address` 不在目录批量接口返回；买家需在 token 签发后按 `request_id` 单次申请投递元数据。
-- `delivery_address` 的值只保证是可投递的 opaque transport endpoint，不保证是邮箱地址、URL 或固定 URI 形态。
+- `task_delivery` / `result_delivery` 不在目录批量接口返回；买家需在 token 签发后按 `request_id` 单次申请投递元数据。
+- `task_delivery.address` 的值只保证是可投递的 opaque transport endpoint，不保证是邮箱地址、URL 或固定 URI 形态。
 - 当前实现会在目录列表直接返回 `seller_public_key_pem`，供 Buyer 在创建本地请求记录与验签时绑定信任根。
 - 后续可新增 `GET /v1/catalog/search`，支持联想、模糊匹配与领域策略。
 - 为保持兼容，`GET /v1/catalog/subagents` 长期保留，不因搜索增强而下线。
@@ -395,8 +395,19 @@ Path 参数：
   "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
   "seller_id": "seller_foxlab",
   "subagent_id": "foxlab.text.classifier.v1",
-  "delivery_address": "local://relay/seller_foxlab/foxlab.text.classifier.v1",
-  "thread_hint": "req:018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
+  "task_delivery": {
+    "kind": "local",
+    "address": "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+    "thread_hint": "req:018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41"
+  },
+  "result_delivery": {
+    "kind": "email",
+    "address": "buyer@example.com",
+    "thread_hint": "req:018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41"
+  },
+  "verification": {
+    "display_code": "RSA-7K4P-91QX"
+  },
   "seller_public_key_pem": "-----BEGIN PUBLIC KEY-----..."
 }
 ```

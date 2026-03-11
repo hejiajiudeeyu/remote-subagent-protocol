@@ -29,6 +29,10 @@ function randomId(prefix) {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "")}`;
 }
 
+function createDisplayCode() {
+  return crypto.randomBytes(6).toString("base64url").toUpperCase();
+}
+
 function parseJsonBody(req) {
   return new Promise((resolve, reject) => {
     const chunks = [];
@@ -113,7 +117,7 @@ function createSellerIdentity({
   subagentId,
   templateRef,
   displayName,
-  deliveryAddress,
+  taskDeliveryAddress,
   taskTypes = [],
   capabilities = [],
   tags = [],
@@ -167,7 +171,7 @@ function createSellerIdentity({
       input_schema: inputSchema,
       output_schema: outputSchema,
       seller_public_key_pem: keyPair.publicKeyPem,
-      delivery_address: deliveryAddress
+      task_delivery_address: taskDeliveryAddress
     },
     signing: {
       publicKeyPem: keyPair.publicKeyPem,
@@ -198,7 +202,7 @@ function createTemplateBundle(templateRef, options = {}) {
 }
 
 function sanitizeCatalogItem(item) {
-  const { delivery_address, ...publicItem } = item;
+  const { task_delivery_address, ...publicItem } = item;
   return publicItem;
 }
 
@@ -300,8 +304,7 @@ export function createPlatformState(options = {}) {
       subagentId: process.env.BOOTSTRAP_SUBAGENT_ID || "foxlab.text.classifier.v1",
       templateRef: "foxlab/text-classifier@v1",
       displayName: "Foxlab Text Classifier",
-      deliveryAddress:
-        process.env.BOOTSTRAP_DELIVERY_ADDRESS || "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+      taskDeliveryAddress: process.env.BOOTSTRAP_TASK_DELIVERY_ADDRESS || "local://relay/seller_foxlab/foxlab.text.classifier.v1",
       taskTypes: ["text_classify"],
       capabilities: ["text.classify", "document.classify"],
       tags: ["nlp", "classification"],
@@ -314,7 +317,7 @@ export function createPlatformState(options = {}) {
       subagentId: "northwind.copywriter.v1",
       templateRef: "northwind/copywriter@v1",
       displayName: "Northwind Copywriter",
-      deliveryAddress: "local://relay/seller_northwind/northwind.copywriter.v1",
+      taskDeliveryAddress: "local://relay/seller_northwind/northwind.copywriter.v1",
       taskTypes: ["copywrite"],
       capabilities: ["marketing.copywrite", "text.generate"],
       tags: ["marketing", "copywriting"]
@@ -497,11 +500,59 @@ function getOrCreateRequest(state, requestId) {
       buyer_id: null,
       seller_id: null,
       subagent_id: null,
+      delivery_meta: null,
+      expected_signer_public_key_pem: null,
       events: []
     };
     state.requests.set(requestId, request);
   }
   return request;
+}
+
+function normalizeResultDelivery(input = {}) {
+  if (!input || typeof input !== "object") {
+    return { error: { code: "CONTRACT_INVALID_RESULT_DELIVERY", message: "result_delivery is required", retryable: false }, statusCode: 400 };
+  }
+
+  const kind = typeof input.kind === "string" ? input.kind.trim() : "";
+  const address = typeof input.address === "string" ? input.address.trim() : "";
+  if (!kind || !address) {
+    return {
+      error: {
+        code: "CONTRACT_INVALID_RESULT_DELIVERY",
+        message: "result_delivery.kind and result_delivery.address are required",
+        retryable: false
+      },
+      statusCode: 400
+    };
+  }
+
+  if (kind === "platform_inbox") {
+    return {
+      error: {
+        code: "RESULT_DELIVERY_KIND_NOT_IMPLEMENTED",
+        message: "result_delivery.kind 'platform_inbox' is reserved but not implemented",
+        retryable: false
+      },
+      statusCode: 501
+    };
+  }
+
+  if (!["email", "local", "relay_http"].includes(kind)) {
+    return {
+      error: {
+        code: "CONTRACT_INVALID_RESULT_DELIVERY",
+        message: `unsupported result_delivery.kind '${kind}'`,
+        retryable: false
+      },
+      statusCode: 400
+    };
+  }
+
+  return {
+    kind,
+    address
+  };
 }
 
 function appendRequestEvent(request, eventType, detail = {}) {
@@ -510,6 +561,12 @@ function appendRequestEvent(request, eventType, detail = {}) {
     event_type: eventType,
     ...detail
   });
+}
+
+function findMatchingRequestEvent(request, { eventType, sellerId, subagentId }) {
+  return (request.events || []).find(
+    (event) => event.event_type === eventType && event.seller_id === sellerId && event.subagent_id === subagentId
+  );
 }
 
 function buildSellerAdminSummary(seller, catalogItems = []) {
@@ -722,7 +779,7 @@ function registerSellerIdentity(state, body, auth = null) {
     input_schema: body.input_schema || null,
     output_schema: body.output_schema || null,
     seller_public_key_pem: body.seller_public_key_pem,
-    delivery_address: body.delivery_address || `local://relay/${body.seller_id}/${body.subagent_id}`
+    task_delivery_address: body.task_delivery_address || `local://relay/${body.seller_id}/${body.subagent_id}`
   };
 
   state.sellers.set(seller.seller_id, seller);
@@ -776,7 +833,7 @@ function registerSellerIdentity(state, body, auth = null) {
     subagent_id: catalogItem.subagent_id,
     api_key: sellerApiKey,
     owner_user_id: ownerUserId,
-    delivery_address: catalogItem.delivery_address,
+    task_delivery_address: catalogItem.task_delivery_address,
     seller_public_key_pem: catalogItem.seller_public_key_pem,
     status: catalogItem.status,
     review_status: "pending",
@@ -964,6 +1021,16 @@ export function createPlatformServer({
           sendError(res, 400, "CONTRACT_INVALID_DELIVERY_META_REQUEST", "seller_id and subagent_id are required");
           return;
         }
+        const normalizedResultDelivery = normalizeResultDelivery(body.result_delivery);
+        if (normalizedResultDelivery?.error) {
+          sendError(
+            res,
+            normalizedResultDelivery.statusCode || 400,
+            normalizedResultDelivery.error.code,
+            normalizedResultDelivery.error.message
+          );
+          return;
+        }
 
         const catalogItem = state.catalog.get(body.subagent_id);
         if (!catalogItem || catalogItem.seller_id !== body.seller_id || catalogItem.status !== "enabled") {
@@ -1008,19 +1075,30 @@ export function createPlatformServer({
         request.buyer_id = auth.user_id;
         request.seller_id = body.seller_id;
         request.subagent_id = body.subagent_id;
-        request.delivery_address = catalogItem.delivery_address;
         request.expected_signer_public_key_pem = catalogItem.seller_public_key_pem;
-        appendRequestEvent(request, "DELIVERY_META_ISSUED", { actor_type: "buyer" });
-        await persistPlatformState(onStateChanged, state);
-
-        sendJson(res, 200, {
+        request.delivery_meta = {
           request_id: requestId,
           seller_id: body.seller_id,
           subagent_id: body.subagent_id,
-          delivery_address: catalogItem.delivery_address,
-          thread_hint: `req:${requestId}`,
+          task_delivery: {
+            kind: catalogItem.task_delivery_address.startsWith("local://") ? "local" : "email",
+            address: catalogItem.task_delivery_address,
+            thread_hint: `req:${requestId}`
+          },
+          result_delivery: {
+            kind: normalizedResultDelivery.kind,
+            address: normalizedResultDelivery.address,
+            thread_hint: `req:${requestId}`
+          },
+          verification: {
+            display_code: request.delivery_meta?.verification?.display_code || createDisplayCode()
+          },
           seller_public_key_pem: catalogItem.seller_public_key_pem
-        });
+        };
+        appendRequestEvent(request, "DELIVERY_META_ISSUED", { actor_type: "buyer" });
+        await persistPlatformState(onStateChanged, state);
+
+        sendJson(res, 200, request.delivery_meta);
         return;
       }
 
@@ -1069,6 +1147,87 @@ export function createPlatformServer({
         }
 
         sendJson(res, 202, { accepted: true, request_id: requestId });
+        return;
+      }
+
+      const requestEventWriteMatch = pathname.match(/^\/v1\/requests\/([^/]+)\/events$/);
+      if (method === "POST" && requestEventWriteMatch) {
+        const requestId = requestEventWriteMatch[1];
+        const auth = requireAuth(req, res, state);
+        if (!auth) {
+          return;
+        }
+        if (auth.type !== "seller") {
+          sendError(res, 403, "AUTH_SCOPE_FORBIDDEN", "only seller callers may append request events");
+          return;
+        }
+
+        const body = await parseJsonBody(req);
+        if (!body.seller_id || !body.subagent_id || !body.event_type) {
+          sendError(
+            res,
+            400,
+            "CONTRACT_INVALID_REQUEST_EVENT",
+            "seller_id, subagent_id, and event_type are required"
+          );
+          return;
+        }
+        if (!["COMPLETED", "FAILED"].includes(body.event_type)) {
+          sendError(
+            res,
+            400,
+            "CONTRACT_INVALID_REQUEST_EVENT",
+            "event_type must be COMPLETED or FAILED"
+          );
+          return;
+        }
+        if (auth.seller_id !== body.seller_id || !auth.subagent_ids.includes(body.subagent_id)) {
+          sendError(res, 403, "AUTH_RESOURCE_FORBIDDEN", "caller does not own the specified seller or subagent");
+          return;
+        }
+
+        const request = state.requests.get(requestId);
+        if (!request) {
+          sendError(res, 404, "REQUEST_NOT_FOUND", "no request found with this id");
+          return;
+        }
+        if (request.seller_id && request.seller_id !== body.seller_id) {
+          sendError(res, 409, "REQUEST_BINDING_MISMATCH", "seller_id does not match existing request");
+          return;
+        }
+        if (request.subagent_id && request.subagent_id !== body.subagent_id) {
+          sendError(res, 409, "REQUEST_BINDING_MISMATCH", "subagent_id does not match existing request");
+          return;
+        }
+
+        request.seller_id = body.seller_id;
+        request.subagent_id = body.subagent_id;
+
+        const existingEvent = findMatchingRequestEvent(request, {
+          eventType: body.event_type,
+          sellerId: body.seller_id,
+          subagentId: body.subagent_id
+        });
+        if (existingEvent) {
+          sendJson(res, 202, { accepted: true, request_id: requestId, event: existingEvent, deduped: true });
+          return;
+        }
+
+        appendRequestEvent(request, body.event_type, {
+          actor_type: "seller",
+          seller_id: body.seller_id,
+          subagent_id: body.subagent_id,
+          status: body.status || (body.event_type === "FAILED" ? "error" : "ok"),
+          error_code: body.error_code || null,
+          finished_at: body.finished_at || nowIso()
+        });
+        await persistPlatformState(onStateChanged, state);
+
+        sendJson(res, 202, {
+          accepted: true,
+          request_id: requestId,
+          event: request.events[request.events.length - 1]
+        });
         return;
       }
 

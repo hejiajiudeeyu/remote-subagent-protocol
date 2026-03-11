@@ -9,7 +9,7 @@
 - [ ] `subagent_id`、`seller_id`、`display_name`、`description` 完整
 - [ ] `capabilities`、`supported_task_types` 可读且可检索
 - [ ] `template_ref` 可访问，模板 5 件套完整
-- [ ] `delivery_address`（opaque transport endpoint）、`contact` 可用
+- [ ] seller task endpoint（字段名为 `task_delivery_address`，在 request-scoped `delivery-meta` 中映射为 `task_delivery.address`）与 `contact` 可用
 
 ## 2. 五问门槛（全部为是）
 

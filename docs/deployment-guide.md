@@ -2,6 +2,13 @@
 
 This guide covers the supported deployment shapes for `platform`, `buyer`, and `seller`.
 
+Current protocol/runtime baseline:
+
+- platform returns request-scoped `delivery-meta` with `task_delivery` and `result_delivery`
+- seller result mail uses a pure JSON body; buyer-controller parses and verifies it before exposing it upstream
+- file outputs may travel as attachments described by signed `artifacts[]`
+- `platform_inbox` is reserved for future evolution and is not implemented in current deployments
+
 ## Recommended Install Paths
 
 - `platform` and `relay`: prefer Docker/Compose deployment

@@ -191,7 +191,7 @@ v0.1 映射约束（冻结）：
 - `request_id`：幂等主键。
 - `contract_version`
 - `created_at`（ISO8601）
-- `buyer`：`buyer_id`、`return_route_hint`（可选）
+- `buyer`：`buyer_id`、`result_delivery`（可选；当前实现支持 `email|local|relay_http`，预留 `platform_inbox`）
 - `seller`：`seller_id`、目标 `subagent_id`
 - `task`：`task_type`、`input`、`output_schema`
 - `constraints`：`soft_timeout_s`、`hard_timeout_s`
@@ -206,7 +206,10 @@ v0.1 映射约束（冻结）：
   "created_at": "2026-03-02T11:20:00Z",
   "buyer": {
     "buyer_id": "buyer_acme",
-    "return_route_hint": "local://buyer-agent/inbox/default"
+    "result_delivery": {
+      "kind": "local",
+      "address": "buyer-controller"
+    }
   },
   "seller": {
     "seller_id": "seller_foxlab",
@@ -290,9 +293,9 @@ v0.1 映射约束（冻结）：
 - 校验通过的错误结果包可进入 Buyer 后续决策循环（重试、切换候选或人工复核），而不是直接丢弃。
 
 ### 投递地址暴露策略（v0.1）
-- `delivery_address` 不在目录批量查询中下发，避免被目录抓取滥用。
-- `delivery_address` 是 opaque transport endpoint；实现可将其编码为本地 mailbox、relay URI、email 地址或其他 transport-specific 字符串。
-- Buyer 在获取 token 后，通过 `POST /v1/requests/{request_id}/delivery-meta` 单次获取投递地址与 `thread_hint`。
+- `task_delivery` / `result_delivery` 不在目录批量查询中下发，避免被目录抓取滥用。
+- `task_delivery.address` 是 opaque transport endpoint；实现可将其编码为本地 mailbox、relay URI、email 地址或其他 transport-specific 字符串。
+- Buyer 在获取 token 后，通过 `POST /v1/requests/{request_id}/delivery-meta` 单次获取双向路由与 `verification`。
 - `delivery-meta` 与 `request_id + seller_id + subagent_id + buyer_id` 绑定，过期后不可复用。
 
 ## 4.5 能力声明模板（Capability Templates）

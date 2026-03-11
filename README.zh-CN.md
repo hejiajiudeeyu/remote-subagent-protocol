@@ -22,6 +22,13 @@
 - 合约模板、schema、时序图与接入手册
 - 单元、集成、端到端与 compose smoke 测试
 
+当前已实现的结果交付基线：
+
+- platform 为单次请求下发双向 `delivery-meta`，同时包含 `task_delivery` 与 `result_delivery`
+- seller 返回纯 JSON 结果正文，buyer controller 验证通过后才向上游 agent 暴露
+- 文件产出通过附件传递，并由签名后的 `artifacts[]` 元数据绑定完整性
+- `platform_inbox` 目前只在协议层预留，运行时尚未实现
+
 ## 仓库边界
 
 这个仓库采用 protocol-first 定位。任何实现侧的产品逻辑、分发策略、业务流程以及其他非协议内容，都应放在独立实现中，并依赖本仓库这个协议真相源，而不是在外部实现里重复定义协议事实。

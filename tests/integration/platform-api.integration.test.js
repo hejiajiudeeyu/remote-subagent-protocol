@@ -139,10 +139,17 @@ describe("platform-api integration", () => {
       body: {
         seller_id: seller.seller_id,
         subagent_id: seller.subagent_id,
-        task_token: token.body.task_token
+        task_token: token.body.task_token,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
       }
     });
     expect(deliveryMeta.status).toBe(200);
+    expect(deliveryMeta.body.task_delivery.address.startsWith("local://")).toBe(true);
+    expect(deliveryMeta.body.result_delivery.address).toBe("buyer-controller");
+    expect(deliveryMeta.body.verification.display_code).toBeTypeOf("string");
 
     const foreignEvents = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
       headers: { Authorization: `Bearer ${buyerTwo.body.api_key}` }
@@ -155,7 +162,11 @@ describe("platform-api integration", () => {
       headers: { Authorization: `Bearer ${buyerTwo.body.api_key}` },
       body: {
         seller_id: seller.seller_id,
-        subagent_id: seller.subagent_id
+        subagent_id: seller.subagent_id,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
       }
     });
     expect(foreignDeliveryMeta.status).toBe(403);
@@ -191,6 +202,186 @@ describe("platform-api integration", () => {
     });
     expect(events.status).toBe(200);
     expect(events.body.events.filter((event) => event.event_type === "ACKED")).toHaveLength(1);
+  });
+
+  it("allows seller to append COMPLETED and FAILED request events idempotently", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "integration-request-events@test.local" }
+    });
+    const seller = state.bootstrap.sellers[0];
+    const sellerAuth = {
+      Authorization: `Bearer ${state.bootstrap.sellers.find((item) => item.seller_id === seller.seller_id).api_key}`
+    };
+    const buyerAuth = {
+      Authorization: `Bearer ${buyer.body.api_key}`
+    };
+    const requestId = "req_request_events_1";
+
+    const token = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        request_id: requestId,
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(token.status).toBe(201);
+
+    const deliveryMeta = await jsonRequest(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: token.body.task_token,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
+      }
+    });
+    expect(deliveryMeta.status).toBe(200);
+
+    const completed = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        event_type: "COMPLETED",
+        status: "ok",
+        finished_at: "2026-03-11T10:00:00Z"
+      }
+    });
+    expect(completed.status).toBe(202);
+    expect(completed.body.event.event_type).toBe("COMPLETED");
+
+    const completedAgain = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        event_type: "COMPLETED",
+        status: "ok",
+        finished_at: "2026-03-11T10:00:01Z"
+      }
+    });
+    expect(completedAgain.status).toBe(202);
+    expect(completedAgain.body.deduped).toBe(true);
+
+    const failedRequestId = "req_request_events_2";
+    const failedToken = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        request_id: failedRequestId,
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(failedToken.status).toBe(201);
+
+    await jsonRequest(baseUrl, `/v1/requests/${failedRequestId}/delivery-meta`, {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: failedToken.body.task_token,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
+      }
+    });
+
+    const failed = await jsonRequest(baseUrl, `/v1/requests/${failedRequestId}/events`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        event_type: "FAILED",
+        status: "error",
+        error_code: "EXEC_INTERNAL_ERROR",
+        finished_at: "2026-03-11T10:01:00Z"
+      }
+    });
+    expect(failed.status).toBe(202);
+    expect(failed.body.event.error_code).toBe("EXEC_INTERNAL_ERROR");
+
+    const events = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      headers: buyerAuth
+    });
+    expect(events.status).toBe(200);
+    expect(events.body.events.filter((event) => event.event_type === "COMPLETED")).toHaveLength(1);
+  });
+
+  it("rejects request event writes from non-seller callers and mismatched bindings", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "integration-request-events-auth@test.local" }
+    });
+    const seller = state.bootstrap.sellers[0];
+    const sellerAuth = {
+      Authorization: `Bearer ${state.bootstrap.sellers.find((item) => item.seller_id === seller.seller_id).api_key}`
+    };
+    const buyerAuth = {
+      Authorization: `Bearer ${buyer.body.api_key}`
+    };
+    const requestId = "req_request_events_auth_1";
+
+    const token = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        request_id: requestId,
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(token.status).toBe(201);
+
+    await jsonRequest(baseUrl, `/v1/requests/${requestId}/delivery-meta`, {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: token.body.task_token,
+        result_delivery: {
+          kind: "local",
+          address: "buyer-controller"
+        }
+      }
+    });
+
+    const buyerWrite = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      method: "POST",
+      headers: buyerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        event_type: "COMPLETED"
+      }
+    });
+    expect(buyerWrite.status).toBe(403);
+    expect(buyerWrite.body.error.code).toBe("AUTH_SCOPE_FORBIDDEN");
+
+    const mismatch = await jsonRequest(baseUrl, `/v1/requests/${requestId}/events`, {
+      method: "POST",
+      headers: sellerAuth,
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: "wrong.agent.v1",
+        event_type: "FAILED"
+      }
+    });
+    expect(mismatch.status).toBe(403);
+    expect(mismatch.body.error.code).toBe("AUTH_RESOURCE_FORBIDDEN");
   });
 
   it("returns inactive for expired token", async () => {
@@ -235,6 +426,41 @@ describe("platform-api integration", () => {
         process.env.TOKEN_TTL_SECONDS = originalTtl;
       }
     }
+  });
+
+  it("returns not implemented for platform_inbox result delivery", async () => {
+    const buyer = await jsonRequest(baseUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "integration-platform-inbox@test.local" }
+    });
+    const seller = state.bootstrap.sellers[0];
+
+    const token = await jsonRequest(baseUrl, "/v1/tokens/task", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${buyer.body.api_key}` },
+      body: {
+        request_id: "req_platform_inbox_1",
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id
+      }
+    });
+    expect(token.status).toBe(201);
+
+    const deliveryMeta = await jsonRequest(baseUrl, "/v1/requests/req_platform_inbox_1/delivery-meta", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${buyer.body.api_key}` },
+      body: {
+        seller_id: seller.seller_id,
+        subagent_id: seller.subagent_id,
+        task_token: token.body.task_token,
+        result_delivery: {
+          kind: "platform_inbox",
+          address: "platform://requests/req_platform_inbox_1/result"
+        }
+      }
+    });
+    expect(deliveryMeta.status).toBe(501);
+    expect(deliveryMeta.body.error.code).toBe("RESULT_DELIVERY_KIND_NOT_IMPLEMENTED");
   });
 
   it("rejects protected endpoints with invalid api key", async () => {

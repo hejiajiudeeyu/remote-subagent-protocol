@@ -11,7 +11,7 @@
   ],
   "version": "1.0.0",
   "status": "active",
-  "delivery_address": "local://relay/seller_example/seller_namespace.capability.variant.v1",
+  "task_delivery_address": "local://relay/seller_example/seller_namespace.capability.variant.v1",
   "contact": {
     "email": "ops@example.com"
   },

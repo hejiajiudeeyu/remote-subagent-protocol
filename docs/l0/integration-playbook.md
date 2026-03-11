@@ -16,7 +16,7 @@
 1. Buyer 拉取目录，选定 `seller_id + subagent_id`。
 2. Buyer 生成 `request_id` 与任务合约。
 3. Buyer 调用 `POST /v1/tokens/task` 申请短期 token。
-4. Buyer 调用 `POST /v1/requests/{request_id}/delivery-meta` 获取单次投递元数据。
+4. Buyer 调用 `POST /v1/requests/{request_id}/delivery-meta` 获取单次投递元数据（`task_delivery + result_delivery + verification`）。
 5. 当前实现：Buyer 通过 `POST /controller/requests/{request_id}/dispatch` 把任务 envelope 发送到 `L0 local transport`。
 6. 当前实现：Seller 通过 `POST /controller/inbox/pull` 拉取任务，解析合约并继续后续处理。
 7. Seller 通过服务端上报 ACK（已接单，可附 ETA）。
@@ -65,9 +65,11 @@
   - `request_id`, `seller_id`, `subagent_id`
 - 将返回 token 放入合约 `token` 字段。
 - 调用 `POST /v1/requests/{request_id}/delivery-meta` 拉取：
-  - `delivery_address`
-  - `thread_hint`
-- `delivery_address` 应视为 opaque transport endpoint；仅使用本次 `delivery-meta` 返回的 endpoint 投递请求，不从目录批量字段直接取地址。
+  - `task_delivery`
+  - `result_delivery`
+  - `verification.display_code`
+- `task_delivery.address` 应视为 opaque transport endpoint；仅使用本次 `delivery-meta` 返回的 endpoint 投递请求，不从目录批量字段直接取地址。
+- `result_delivery` 是 Seller 回传结果的绑定路由；当前实现支持 `email|local|relay_http`，预留 `platform_inbox`。
 - 发送任务请求：
   - 统一 envelope：包含 `request_id / seller_id / subagent_id / payload / thread_hint`
 - 本地状态更新：`CREATED -> SENT`
@@ -91,7 +93,9 @@
 - 收到候选结果后按顺序校验：
   1. `request_id` 匹配
   2. `seller_id/subagent_id` 匹配
-  3. 结果签名通过（使用目录或 `delivery-meta` 预绑定的 `seller_public_key_pem`）
+  3. `verification.display_code` 匹配本地 request 绑定值
+  4. 结果签名通过（使用目录或 `delivery-meta` 预绑定的 `seller_public_key_pem`）
+  5. 若存在 `artifacts[]`，附件 `name/media_type/byte_size/sha256` 校验通过
   4. `status=ok` 时，`output` 符合 `output_schema`
   5. `status=error` 时，`error.code/message` 结构完整
 - 状态迁移：
@@ -142,7 +146,7 @@
   - `TOKEN_TTL_SECONDS`
   - `BOOTSTRAP_SELLER_ID`
   - `BOOTSTRAP_SUBAGENT_ID`
-  - `BOOTSTRAP_DELIVERY_ADDRESS`
+  - `BOOTSTRAP_TASK_DELIVERY_ADDRESS`
   - `BOOTSTRAP_SELLER_API_KEY`
   - `BOOTSTRAP_SELLER_PUBLIC_KEY_PEM`
   - `BOOTSTRAP_SELLER_PRIVATE_KEY_PEM`
