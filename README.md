@@ -9,6 +9,14 @@ English | [中文](README.zh-CN.md)
 
 ## Overview
 
+The project has now been split into three active repositories:
+
+- `delegated-execution-protocol`: protocol truth source and the published `@delexec/contracts` package
+- `delegated-execution-client`: end-user client runtime and the published `@delexec/ops` CLI
+- `delegated-execution-platform-selfhost`: self-hosted platform, relay, images, and `docker compose` operator entrypoints
+
+This repository should now be treated as the historical coordination monorepo and migration workspace, not the primary day-to-day implementation home.
+
 `Remote Subagent Protocol` defines how a buyer-side local agent discovers a remote subagent, authorizes a task, delivers a contract, verifies a signed result, and accumulates trust signals across repeated calls.
 
 `Remote` refers to the execution and trust boundary, not necessarily cross-network deployment. A single-host `L0 local transport` setup still models remote execution semantics if the buyer and seller remain separate protocol actors.
