@@ -1,6 +1,6 @@
 services:
   relay:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-relay:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-relay:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -18,7 +18,7 @@ services:
       - relay-data:/data
 
   buyer-controller:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-buyer:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-buyer:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -51,7 +51,7 @@ services:
 
   seller-controller:
     profiles: ["seller"]
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-seller:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-seller:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace

@@ -1,6 +1,6 @@
 services:
   relay:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-relay:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-relay:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace

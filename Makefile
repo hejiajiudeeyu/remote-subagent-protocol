@@ -3,7 +3,7 @@ SHELL := /bin/zsh
 COMPOSE_FILE ?= docker-compose.yml
 COMPOSE ?= docker compose -f $(COMPOSE_FILE)
 
-.PHONY: up down restart logs ps build clean deploy deploy-platform deploy-relay deploy-buyer deploy-seller deploy-ops deploy-all ops-auth check-deploy-config smoke-platform smoke-buyer smoke-seller test test-unit test-integration test-e2e test-e2e-ui test-flow-ui test-compose-smoke test-compose-smoke-strict test-all test-ci
+.PHONY: up down restart logs ps build clean deploy deploy-platform deploy-public-stack deploy-relay deploy-buyer deploy-seller deploy-ops deploy-all ops-auth check-deploy-config smoke-platform smoke-buyer smoke-seller test test-unit test-integration test-e2e test-e2e-ui test-flow-ui test-compose-smoke test-public-stack-smoke test-local-images-smoke test-published-images-smoke test-compose-smoke-strict test-all test-ci
 
 up:
 	$(COMPOSE) up -d --build
@@ -31,6 +31,9 @@ deploy:
 
 deploy-platform:
 	docker compose -f deploy/platform/docker-compose.yml up -d --build
+
+deploy-public-stack:
+	docker compose -f deploy/public-stack/docker-compose.yml up -d --build
 
 deploy-relay:
 	docker compose -f deploy/relay/docker-compose.yml up -d --build
@@ -82,6 +85,15 @@ test-flow-ui:
 
 test-compose-smoke:
 	npm run test:compose-smoke
+
+test-public-stack-smoke:
+	npm run test:public-stack-smoke
+
+test-local-images-smoke:
+	npm run test:local-images-smoke
+
+test-published-images-smoke:
+	npm run test:published-images-smoke
 
 test-compose-smoke-strict:
 	npm run test:compose-smoke:strict

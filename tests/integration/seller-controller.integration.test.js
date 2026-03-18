@@ -154,6 +154,15 @@ describe("seller-controller integration", () => {
       });
       expect(approved.status).toBe(200);
 
+      const approveSeller = await jsonRequest(platformUrl, "/v1/admin/sellers/seller_register_test/approve", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${platformState.adminApiKey}`
+        },
+        body: { reason: "seller approved for runtime" }
+      });
+      expect(approveSeller.status).toBe(200);
+
       const enabledCatalog = await jsonRequest(platformUrl, "/v1/catalog/subagents?capability=contract.extract");
       expect(enabledCatalog.status).toBe(200);
       expect(enabledCatalog.body.items.some((item) => item.subagent_id === "register.test.v1")).toBe(true);
@@ -821,6 +830,69 @@ describe("seller-controller integration", () => {
     } finally {
       stopHeartbeat();
       await closeServer(platformServer);
+    }
+  });
+
+  it("runs queued tasks concurrently when worker concurrency is greater than one", async () => {
+    let activeExecutions = 0;
+    let maxConcurrentExecutions = 0;
+    const concurrentState = createSellerState({
+      sellerId: "seller_concurrent",
+      subagentIds: ["seller.concurrent.v1"],
+      workerConcurrency: 2
+    });
+    const concurrentServer = createSellerControllerServer({
+      serviceName: "seller-controller-concurrency-test",
+      state: concurrentState,
+      executor: createFunctionExecutor(async ({ requestId }) => {
+        activeExecutions += 1;
+        maxConcurrentExecutions = Math.max(maxConcurrentExecutions, activeExecutions);
+        await new Promise((resolve) => setTimeout(resolve, 120));
+        activeExecutions -= 1;
+        return {
+          status: "ok",
+          output: {
+            request_id: requestId,
+            mode: "concurrent"
+          },
+          schema_valid: true,
+          usage: { tokens_in: 1, tokens_out: 1 }
+        };
+      })
+    });
+    const concurrentUrl = await listenServer(concurrentServer);
+
+    try {
+      const health = await jsonRequest(concurrentUrl, "/");
+      expect(health.status).toBe(200);
+      expect(health.body.worker_concurrency).toBe(2);
+
+      for (const requestId of ["req_seller_concurrent_1", "req_seller_concurrent_2", "req_seller_concurrent_3"]) {
+        const accepted = await jsonRequest(concurrentUrl, "/controller/tasks", {
+          method: "POST",
+          body: {
+            request_id: requestId,
+            seller_id: "seller_concurrent",
+            subagent_id: "seller.concurrent.v1",
+            delay_ms: 10
+          }
+        });
+        expect(accepted.status).toBe(202);
+        expect(accepted.body.queue_policy.worker_concurrency).toBe(2);
+      }
+
+      await waitFor(async () => {
+        const queue = await jsonRequest(concurrentUrl, "/controller/queue");
+        const completed = Array.from(concurrentState.tasks.values()).filter((task) => task.status === "COMPLETED");
+        if (queue.body.running.length > 0 || completed.length < 3) {
+          throw new Error("concurrent_tasks_not_completed");
+        }
+        return completed;
+      }, { timeoutMs: 6000, intervalMs: 50 });
+
+      expect(maxConcurrentExecutions).toBeGreaterThanOrEqual(2);
+    } finally {
+      await closeServer(concurrentServer);
     }
   });
 });

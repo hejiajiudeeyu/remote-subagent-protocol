@@ -11,8 +11,11 @@
   },
   "dependencies": {
     "@croc/postgres-store": "0.1.0",
+    "@croc/runtime-utils": "0.1.0",
     "@croc/seller-runtime-core": "0.1.0",
     "@croc/sqlite-store": "0.1.0",
+    "@croc/transport-emailengine": "0.1.0",
+    "@croc/transport-gmail": "0.1.0",
     "@croc/transport-relay-http": "0.1.0"
   }
 }

@@ -1,9 +1,36 @@
+import crypto from "node:crypto";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 
-import { ensureSellerIdentity, ensureOpsState, removeSubagent, saveOpsState, setSubagentEnabled, upsertSubagent } from "./config.js";
+import { buildStructuredError } from "@croc/contracts";
+import {
+  buildTransportEnvUpdates,
+  buildTransportSecretUpdates,
+  ensureSellerIdentity,
+  ensureOpsState,
+  hasEncryptedSecretStore,
+  listLegacySecretKeys,
+  normalizeTransportConfig,
+  OPS_SECRET_KEYS,
+  readTransportSecretsFromEnv,
+  readResolvedOpsSecrets,
+  redactTransportConfig,
+  removeSubagent,
+  saveOpsState,
+  scrubLegacySecrets,
+  setSubagentEnabled,
+  unlockOpsSecrets,
+  upsertSubagent,
+  writeOpsSecrets
+} from "./config.js";
+import {
+  buildExampleRequestBody,
+  buildExampleSubagentDefinition,
+  LOCAL_EXAMPLE_DISPLAY_NAME,
+  LOCAL_EXAMPLE_SUBAGENT_ID
+} from "./example-subagent.js";
 import {
   appendServiceLog,
   appendSupervisorEvent,
@@ -12,6 +39,7 @@ import {
   readServiceLogTail,
   readSupervisorEventTail
 } from "./logging.js";
+import { initializeSecretStore, rotateSecretStorePassphrase } from "@croc/runtime-utils";
 
 const require = createRequire(import.meta.url);
 
@@ -24,13 +52,13 @@ function sendJson(res, statusCode, data) {
     "content-type": "application/json; charset=utf-8",
     "access-control-allow-origin": "*",
     "access-control-allow-methods": "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-    "access-control-allow-headers": "Content-Type, Authorization"
+    "access-control-allow-headers": "Content-Type, Authorization, X-Ops-Session"
   });
   res.end(JSON.stringify(data));
 }
 
-function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
-  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+function sendError(res, statusCode, code, message, { retryable, ...extra } = {}) {
+  sendJson(res, statusCode, buildStructuredError(code, message, { retryable, ...extra }));
 }
 
 function parseJsonBody(req) {
@@ -72,6 +100,393 @@ function processBaseUrl(port) {
   return `http://127.0.0.1:${port}`;
 }
 
+function normalizedString(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  const trimmed = String(value).trim();
+  return trimmed ? trimmed : null;
+}
+
+const OPS_SESSION_HEADER = "x-ops-session";
+const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+
+function createSessionToken() {
+  return crypto.randomUUID().replace(/-/g, "");
+}
+
+function buildTransportSecretLookup(secrets) {
+  return {
+    [OPS_SECRET_KEYS.transport_emailengine_access_token]: secrets.transport.emailengine.access_token,
+    [OPS_SECRET_KEYS.transport_gmail_client_secret]: secrets.transport.gmail.client_secret,
+    [OPS_SECRET_KEYS.transport_gmail_refresh_token]: secrets.transport.gmail.refresh_token
+  };
+}
+
+function buildLegacyTransportSecretEnv(secretUpdates) {
+  return {
+    TRANSPORT_EMAILENGINE_ACCESS_TOKEN: secretUpdates[OPS_SECRET_KEYS.transport_emailengine_access_token] || undefined,
+    TRANSPORT_GMAIL_CLIENT_SECRET: secretUpdates[OPS_SECRET_KEYS.transport_gmail_client_secret] || undefined,
+    TRANSPORT_GMAIL_REFRESH_TOKEN: secretUpdates[OPS_SECRET_KEYS.transport_gmail_refresh_token] || undefined
+  };
+}
+
+function mergeEnvWithResolvedSecrets(env, secrets) {
+  return {
+    ...env,
+    BUYER_PLATFORM_API_KEY: secrets.buyer_api_key || env.BUYER_PLATFORM_API_KEY || env.PLATFORM_API_KEY || "",
+    PLATFORM_API_KEY: secrets.buyer_api_key || env.PLATFORM_API_KEY || env.BUYER_PLATFORM_API_KEY || "",
+    SELLER_PLATFORM_API_KEY: secrets.seller_platform_api_key || env.SELLER_PLATFORM_API_KEY || "",
+    PLATFORM_ADMIN_API_KEY: secrets.platform_admin_api_key || env.PLATFORM_ADMIN_API_KEY || "",
+    ...buildTransportSecretLookup(secrets)
+  };
+}
+
+function pruneExpiredSessions(runtime) {
+  const now = Date.now();
+  for (const [token, session] of runtime.auth.sessions.entries()) {
+    if (session.expiresAt <= now) {
+      runtime.auth.sessions.delete(token);
+    }
+  }
+  if (runtime.auth.sessions.size === 0) {
+    runtime.auth.unlockedSecrets = null;
+    runtime.auth.passphrase = null;
+    runtime.auth.unlockedAt = null;
+  }
+}
+
+function createAuthenticatedSession(runtime, passphrase, secrets) {
+  pruneExpiredSessions(runtime);
+  const token = createSessionToken();
+  const expiresAt = Date.now() + SESSION_TTL_MS;
+  runtime.auth.passphrase = passphrase;
+  runtime.auth.unlockedSecrets = secrets;
+  runtime.auth.unlockedAt = nowIso();
+  runtime.auth.sessions.set(token, {
+    token,
+    createdAt: nowIso(),
+    expiresAt
+  });
+  return {
+    token,
+    expires_at: new Date(expiresAt).toISOString()
+  };
+}
+
+function readSessionToken(req) {
+  const headerValue = req.headers[OPS_SESSION_HEADER];
+  if (Array.isArray(headerValue)) {
+    return headerValue[0] || null;
+  }
+  return normalizedString(headerValue);
+}
+
+function getCurrentSession(runtime, req) {
+  pruneExpiredSessions(runtime);
+  const token = readSessionToken(req);
+  if (!token) {
+    return null;
+  }
+  const session = runtime.auth.sessions.get(token);
+  if (!session) {
+    return null;
+  }
+  session.expiresAt = Date.now() + SESSION_TTL_MS;
+  return {
+    token,
+    expires_at: new Date(session.expiresAt).toISOString()
+  };
+}
+
+function isProtectedRoute(method, pathname) {
+  if (pathname === "/healthz" || pathname === "/status" || pathname === "/setup" || pathname.startsWith("/auth/session")) {
+    return false;
+  }
+  if (method === "GET" && pathname === "/") {
+    return false;
+  }
+  return true;
+}
+
+function getAuthState(runtime, state) {
+  pruneExpiredSessions(runtime);
+  const configured = hasEncryptedSecretStore();
+  const legacySecretKeys = listLegacySecretKeys(state);
+  const activeSession = runtime.auth.sessions.values().next().value || null;
+  return {
+    configured,
+    secret_file: state.secretsFile,
+    legacy_secret_keys: legacySecretKeys,
+    legacy_secret_source_present: legacySecretKeys.length > 0,
+    locked: configured && runtime.auth.sessions.size === 0,
+    authenticated: configured ? runtime.auth.sessions.size > 0 : true,
+    setup_required: !configured,
+    expires_at: activeSession ? new Date(activeSession.expiresAt).toISOString() : null
+  };
+}
+
+function requireAuthenticatedSession(req, res, runtime, state) {
+  if (!hasEncryptedSecretStore()) {
+    return { ok: true, session: null };
+  }
+  const session = getCurrentSession(runtime, req);
+  if (!session) {
+    sendError(res, 401, "AUTH_SESSION_REQUIRED", "local supervisor session is locked or missing", {
+      retryable: false,
+      auth: getAuthState(runtime, state)
+    });
+    return { ok: false, session: null };
+  }
+  return { ok: true, session };
+}
+
+function normalizeTransportPayload(body = {}) {
+  return normalizeTransportConfig({ runtime: { transport: body } }, {});
+}
+
+function validateTransportConfig(transport) {
+  if (!["local", "relay_http", "email"].includes(transport.type)) {
+    return { status: 400, body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_TYPE", "unsupported transport type") };
+  }
+  if (transport.type === "relay_http" && !normalizedString(transport.relay_http?.base_url)) {
+    return { status: 400, body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "relay_http.base_url is required") };
+  }
+  if (transport.type === "email") {
+    if (!["emailengine", "gmail"].includes(transport.email.provider)) {
+      return { status: 400, body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "unsupported email provider") };
+    }
+    if (!normalizedString(transport.email.sender)) {
+      return { status: 400, body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "email.sender is required") };
+    }
+    if (!normalizedString(transport.email.receiver)) {
+      return { status: 400, body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "email.receiver is required") };
+    }
+    if (transport.email.provider === "emailengine") {
+      if (!normalizedString(transport.email.emailengine?.base_url) || !normalizedString(transport.email.emailengine?.account)) {
+        return {
+          status: 400,
+          body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "email.emailengine.base_url and account are required")
+        };
+      }
+    }
+    if (transport.email.provider === "gmail" && (!normalizedString(transport.email.gmail?.client_id) || !normalizedString(transport.email.gmail?.user))) {
+      return {
+        status: 400,
+        body: buildStructuredError("CONTRACT_INVALID_TRANSPORT_BODY", "email.gmail.client_id and user are required")
+      };
+    }
+  }
+  return null;
+}
+
+function getRuntimeTransport(state) {
+  return normalizeTransportConfig(state.config, state.env);
+}
+
+function getResolvedSecrets(state, runtime) {
+  return readResolvedOpsSecrets(state, runtime.auth.unlockedSecrets);
+}
+
+function getTransportResponse(state, runtime) {
+  return redactTransportConfig(state.config.runtime?.transport || {}, mergeEnvWithResolvedSecrets(state.env, getResolvedSecrets(state, runtime)));
+}
+
+function buildPlatformHeaders(state, runtime) {
+  const secrets = getResolvedSecrets(state, runtime);
+  return secrets.buyer_api_key ? { "X-Platform-Api-Key": secrets.buyer_api_key } : {};
+}
+
+function findConfiguredExampleSubagent(state) {
+  return (state.config.seller?.subagents || []).find((item) => item.subagent_id === LOCAL_EXAMPLE_SUBAGENT_ID) || null;
+}
+
+function buildExampleVisibilityError(example) {
+  if (!example) {
+    return {
+      status: 404,
+      body: buildStructuredError("EXAMPLE_SUBAGENT_NOT_CONFIGURED", "official example subagent is not configured locally", {
+        stage: "add_example_subagent"
+      })
+    };
+  }
+  if (example.submitted_for_review !== true) {
+    return {
+      status: 409,
+      body: buildStructuredError("EXAMPLE_REVIEW_NOT_SUBMITTED", "official example subagent must be submitted for review first", {
+        stage: "submit_review"
+      })
+    };
+  }
+  return {
+    status: 409,
+    body: buildStructuredError("EXAMPLE_NOT_VISIBLE_IN_CATALOG", "official example subagent is not yet visible in catalog", {
+      stage: "approve_and_catalog",
+      review_status: example.review_status || "pending"
+    })
+  };
+}
+
+async function testRelayTransport(baseUrl) {
+  try {
+    const response = await fetch(new URL("/healthz", baseUrl));
+    return {
+      ok: response.ok,
+      kind: "relay_http",
+      status: response.status,
+      detail: response.ok ? "relay_health_ok" : "relay_health_failed"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: "relay_http",
+      error: buildStructuredError("TRANSPORT_CONNECTION_FAILED", error instanceof Error ? error.message : "unknown_error")
+    };
+  }
+}
+
+async function testEmailEngineTransport(transport, secrets) {
+  if (!secrets.emailengine.access_token) {
+    return {
+      ok: false,
+      kind: "emailengine",
+      error: buildStructuredError("AUTH_CREDENTIALS_MISSING", "EmailEngine access token is not configured")
+    };
+  }
+
+  try {
+    const response = await fetch(
+      new URL(`/v1/account/${encodeURIComponent(transport.email.emailengine.account)}`, transport.email.emailengine.base_url),
+      {
+        headers: {
+          Authorization: `Bearer ${secrets.emailengine.access_token}`
+        }
+      }
+    );
+    if (!response.ok) {
+      return {
+        ok: false,
+        kind: "emailengine",
+        status: response.status,
+        error: buildStructuredError("AUTH_INVALID_CREDENTIALS", `EmailEngine returned ${response.status}`)
+      };
+    }
+    return {
+      ok: true,
+      kind: "emailengine",
+      status: response.status,
+      detail: "emailengine_auth_ok"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: "emailengine",
+      error: buildStructuredError("TRANSPORT_CONNECTION_FAILED", error instanceof Error ? error.message : "unknown_error")
+    };
+  }
+}
+
+async function getGmailAccessToken(transport, secrets) {
+  if (!secrets.gmail.client_secret || !secrets.gmail.refresh_token) {
+    return {
+      ok: false,
+      error: buildStructuredError("AUTH_CREDENTIALS_MISSING", "Gmail client secret or refresh token is not configured")
+    };
+  }
+
+  try {
+    const response = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        client_id: transport.email.gmail.client_id,
+        client_secret: secrets.gmail.client_secret,
+        refresh_token: secrets.gmail.refresh_token,
+        grant_type: "refresh_token"
+      })
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok || !body?.access_token) {
+      return {
+        ok: false,
+        status: response.status,
+        error: buildStructuredError("AUTH_INVALID_CREDENTIALS", body?.error_description || body?.error || "gmail_token_refresh_failed")
+      };
+    }
+    return {
+      ok: true,
+      accessToken: body.access_token
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      error: buildStructuredError("TRANSPORT_CONNECTION_FAILED", error instanceof Error ? error.message : "unknown_error")
+    };
+  }
+}
+
+async function testGmailTransport(transport, secrets) {
+  const token = await getGmailAccessToken(transport, secrets);
+  if (!token.ok) {
+    return {
+      ok: false,
+      kind: "gmail",
+      ...(token.status ? { status: token.status } : {}),
+      error: token.error
+    };
+  }
+
+  try {
+    const response = await fetch(`https://gmail.googleapis.com/gmail/v1/users/${encodeURIComponent(transport.email.gmail.user)}/profile`, {
+      headers: {
+        Authorization: `Bearer ${token.accessToken}`
+      }
+    });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      return {
+        ok: false,
+        kind: "gmail",
+        status: response.status,
+        error: buildStructuredError("AUTH_INVALID_CREDENTIALS", body?.error?.message || `gmail_profile_failed_${response.status}`)
+      };
+    }
+    return {
+      ok: true,
+      kind: "gmail",
+      status: response.status,
+      detail: "gmail_auth_ok"
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      kind: "gmail",
+      error: buildStructuredError("TRANSPORT_CONNECTION_FAILED", error instanceof Error ? error.message : "unknown_error")
+    };
+  }
+}
+
+async function testTransportConnection(state, runtime) {
+  const transport = getRuntimeTransport(state);
+  const secrets = getResolvedSecrets(state, runtime).transport;
+  if (transport.type === "local") {
+    return {
+      ok: true,
+      kind: "local",
+      detail: "local_transport_uses_managed_relay"
+    };
+  }
+  if (transport.type === "relay_http") {
+    return testRelayTransport(transport.relay_http.base_url);
+  }
+  if (transport.email.provider === "emailengine") {
+    return testEmailEngineTransport(transport, secrets);
+  }
+  return testGmailTransport(transport, secrets);
+}
+
 function logSeverity(message) {
   if (!message) {
     return null;
@@ -92,7 +507,13 @@ export function createOpsSupervisorServer() {
     platform_base_url: state.config.platform.base_url
   });
   const runtime = {
-    processes: new Map()
+    processes: new Map(),
+    auth: {
+      sessions: new Map(),
+      unlockedSecrets: null,
+      passphrase: null,
+      unlockedAt: null
+    }
   };
 
   function getRuntimeStatus(name) {
@@ -121,20 +542,49 @@ export function createOpsSupervisorServer() {
 
   function serviceEnv(name) {
     const ports = state.config.runtime.ports;
-    const relayBaseUrl = state.config.runtime.external_relay?.base_url || processBaseUrl(ports.relay);
+    const runtimeTransport = getRuntimeTransport(state);
+    const resolvedSecrets = getResolvedSecrets(state, runtime);
+    const envWithSecrets = mergeEnvWithResolvedSecrets(state.env, resolvedSecrets);
+    const relayBaseUrl =
+      runtimeTransport.type === "relay_http"
+        ? runtimeTransport.relay_http.base_url
+        : processBaseUrl(ports.relay);
+    const transportEnv = buildTransportEnvUpdates(
+      runtimeTransport.type === "local"
+        ? {
+            ...runtimeTransport,
+            relay_http: { base_url: relayBaseUrl }
+          }
+        : runtimeTransport,
+      envWithSecrets
+    );
     const base = {
       ...process.env,
       CROC_OPS_HOME: process.env.CROC_OPS_HOME || path.dirname(state.envFile),
       PLATFORM_API_BASE_URL: state.config.platform.base_url,
-      BUYER_PLATFORM_API_KEY: state.config.buyer.api_key || "",
-      PLATFORM_API_KEY: state.config.buyer.api_key || "",
+      BUYER_PLATFORM_API_KEY: resolvedSecrets.buyer_api_key || "",
+      PLATFORM_API_KEY: resolvedSecrets.buyer_api_key || "",
       BUYER_CONTACT_EMAIL: state.config.buyer.contact_email || "",
       SELLER_ID: state.config.seller.seller_id || "",
       SELLER_SIGNING_PUBLIC_KEY_PEM: state.env.SELLER_SIGNING_PUBLIC_KEY_PEM || "",
       SELLER_SIGNING_PRIVATE_KEY_PEM: state.env.SELLER_SIGNING_PRIVATE_KEY_PEM || "",
       SUBAGENT_IDS: (state.config.seller.subagents || []).map((item) => item.subagent_id).join(","),
-      SELLER_PLATFORM_API_KEY: state.env.SELLER_PLATFORM_API_KEY || "",
-      TRANSPORT_BASE_URL: relayBaseUrl
+      SELLER_PLATFORM_API_KEY: resolvedSecrets.seller_platform_api_key || "",
+      TRANSPORT_BASE_URL: relayBaseUrl,
+      TRANSPORT_TYPE: runtimeTransport.type,
+      TRANSPORT_PROVIDER: transportEnv.TRANSPORT_PROVIDER || "",
+      TRANSPORT_EMAIL_PROVIDER: transportEnv.TRANSPORT_EMAIL_PROVIDER || "",
+      TRANSPORT_EMAIL_MODE: transportEnv.TRANSPORT_EMAIL_MODE || "",
+      TRANSPORT_EMAIL_SENDER: transportEnv.TRANSPORT_EMAIL_SENDER || "",
+      TRANSPORT_EMAIL_RECEIVER: transportEnv.TRANSPORT_EMAIL_RECEIVER || "",
+      TRANSPORT_EMAIL_POLL_INTERVAL_MS: transportEnv.TRANSPORT_EMAIL_POLL_INTERVAL_MS || "",
+      TRANSPORT_EMAILENGINE_BASE_URL: state.env.TRANSPORT_EMAILENGINE_BASE_URL || "",
+      TRANSPORT_EMAILENGINE_ACCOUNT: state.env.TRANSPORT_EMAILENGINE_ACCOUNT || "",
+      TRANSPORT_EMAILENGINE_ACCESS_TOKEN: resolvedSecrets.transport.emailengine.access_token || "",
+      TRANSPORT_GMAIL_CLIENT_ID: state.env.TRANSPORT_GMAIL_CLIENT_ID || "",
+      TRANSPORT_GMAIL_USER: state.env.TRANSPORT_GMAIL_USER || "",
+      TRANSPORT_GMAIL_CLIENT_SECRET: resolvedSecrets.transport.gmail.client_secret || "",
+      TRANSPORT_GMAIL_REFRESH_TOKEN: resolvedSecrets.transport.gmail.refresh_token || ""
     };
 
     if (name === "relay") {
@@ -283,15 +733,20 @@ export function createOpsSupervisorServer() {
 
   async function buildStatus() {
     const subagents = state.config.seller.subagents || [];
+    const secrets = getResolvedSecrets(state, runtime);
     const pendingReviewCount = subagents.filter((item) => item.submitted_for_review !== true).length;
     const reviewStatusCounts = subagents.reduce((counts, item) => {
       const key = item.review_status || "local_only";
       counts[key] = (counts[key] || 0) + 1;
       return counts;
     }, {});
+    state.config.buyer.api_key_configured = Boolean(secrets.buyer_api_key);
+    state.config.platform_console ||= {};
+    state.config.platform_console.admin_api_key_configured = Boolean(secrets.platform_admin_api_key);
     return {
       ok: true,
       config: state.config,
+      auth: getAuthState(runtime, state),
       debug: {
         logs_dir: path.join(path.dirname(state.envFile), "logs"),
         event_log: getSupervisorEventsFile(),
@@ -394,14 +849,31 @@ export function createOpsSupervisorServer() {
     if (response.status !== 201) {
       return response;
     }
-    state.config.buyer.api_key = response.body.api_key;
     state.config.buyer.contact_email = response.body.contact_email || contactEmail;
+    state.config.buyer.api_key_configured = true;
+    if (hasEncryptedSecretStore()) {
+      writeOpsSecrets(runtime.auth.passphrase, {
+        [OPS_SECRET_KEYS.buyer_api_key]: response.body.api_key
+      });
+      runtime.auth.unlockedSecrets = unlockOpsSecrets(runtime.auth.passphrase);
+      scrubLegacySecrets(state);
+    } else {
+      state.env = saveOpsState({
+        ...state,
+        env: {
+          ...state.env,
+          BUYER_PLATFORM_API_KEY: response.body.api_key,
+          PLATFORM_API_KEY: response.body.api_key
+        }
+      });
+    }
     state.env = saveOpsState(state);
     return response;
   }
 
   function buildSellerRegisterHeaders() {
-    const apiKey = state.config.buyer.api_key || state.env.SELLER_PLATFORM_API_KEY || state.env.PLATFORM_API_KEY;
+    const secrets = getResolvedSecrets(state, runtime);
+    const apiKey = secrets.buyer_api_key || secrets.seller_platform_api_key;
     if (!apiKey) {
       throw new Error("buyer_platform_api_key_required");
     }
@@ -413,7 +885,7 @@ export function createOpsSupervisorServer() {
     const pending = (state.config.seller.subagents || []).filter((item) => item.submitted_for_review !== true);
     const results = [];
     for (const item of pending) {
-      const response = await requestJson(state.config.platform.base_url, "/v1/sellers/register", {
+      const response = await requestJson(state.config.platform.base_url, "/v1/catalog/subagents", {
         method: "POST",
         headers: buildSellerRegisterHeaders(),
         body: {
@@ -429,20 +901,97 @@ export function createOpsSupervisorServer() {
       if (response.status !== 201) {
         return response;
       }
-      state.env = saveOpsState({
-        ...state,
-        env: {
-          ...state.env,
-          SELLER_PLATFORM_API_KEY: response.body.api_key
-        }
-      });
-      state.env.SELLER_PLATFORM_API_KEY = response.body.api_key;
+      if (hasEncryptedSecretStore()) {
+        writeOpsSecrets(runtime.auth.passphrase, {
+          [OPS_SECRET_KEYS.seller_platform_api_key]: response.body.seller_api_key || response.body.api_key
+        });
+        runtime.auth.unlockedSecrets = unlockOpsSecrets(runtime.auth.passphrase);
+        scrubLegacySecrets(state);
+      } else {
+        state.env = saveOpsState({
+          ...state,
+          env: {
+            ...state.env,
+            SELLER_PLATFORM_API_KEY: response.body.seller_api_key || response.body.api_key
+          }
+        });
+      }
       item.submitted_for_review = true;
-      item.review_status = response.body.review_status || "pending";
+      item.review_status = response.body.subagent_review_status || response.body.review_status || "pending";
       results.push(response.body);
     }
     saveOpsState(state);
     return { status: 201, body: { seller_id: sellerIdentity.seller_id, submitted: results.length, results } };
+  }
+
+  async function addOfficialExampleSubagent() {
+    const definition = buildExampleSubagentDefinition();
+    upsertSubagent(state, definition);
+    state.env = saveOpsState(state);
+    await reloadSellerIfRunning();
+    appendSupervisorEvent({
+      type: "subagent_upserted",
+      subagent_id: definition.subagent_id,
+      adapter_type: definition.adapter_type,
+      example: true
+    });
+    return definition;
+  }
+
+  async function dispatchExampleRequest(body = {}) {
+    await ensureBaseServices();
+    if (!getResolvedSecrets(state, runtime).buyer_api_key) {
+      return {
+        status: 409,
+        body: buildStructuredError("BUYER_NOT_REGISTERED", "buyer must be registered before running the local example", {
+          stage: "register_buyer"
+        })
+      };
+    }
+    if (state.config.seller.enabled !== true) {
+      return {
+        status: 409,
+        body: buildStructuredError("SELLER_NOT_ENABLED", "seller must be enabled before running the local example", {
+          stage: "enable_seller"
+        })
+      };
+    }
+
+    const example = findConfiguredExampleSubagent(state);
+    if (!example) {
+      return buildExampleVisibilityError(example);
+    }
+    if (example.submitted_for_review !== true) {
+      return buildExampleVisibilityError(example);
+    }
+
+    const catalog = await requestJson(
+      processBaseUrl(state.config.runtime.ports.buyer),
+      `/controller/catalog/subagents?subagent_id=${encodeURIComponent(LOCAL_EXAMPLE_SUBAGENT_ID)}&seller_id=${encodeURIComponent(
+        state.config.seller.seller_id || ""
+      )}`,
+      {
+        headers: buildPlatformHeaders(state, runtime)
+      }
+    );
+
+    const selected = catalog.body?.items?.find(
+      (item) => item.subagent_id === LOCAL_EXAMPLE_SUBAGENT_ID && item.seller_id === state.config.seller.seller_id
+    );
+    if (!selected) {
+      return buildExampleVisibilityError(example);
+    }
+
+    return requestJson(processBaseUrl(state.config.runtime.ports.buyer), "/controller/remote-requests", {
+      method: "POST",
+      headers: buildPlatformHeaders(state, runtime),
+      body: buildExampleRequestBody({
+        text: body.text,
+        sellerId: selected.seller_id,
+        subagentId: selected.subagent_id,
+        signerPublicKeyPem: selected.seller_public_key_pem
+      })
+    });
   }
 
   const server = http.createServer(async (req, res) => {
@@ -456,12 +1005,187 @@ export function createOpsSupervisorServer() {
         return;
       }
 
+      if (isProtectedRoute(method, pathname)) {
+        const session = requireAuthenticatedSession(req, res, runtime, state);
+        if (!session.ok) {
+          return;
+        }
+      }
+
       if (method === "GET" && pathname === "/healthz") {
         sendJson(res, 200, { ok: true, service: "ops-supervisor" });
         return;
       }
+      if (method === "GET" && pathname === "/auth/session") {
+        sendJson(res, 200, {
+          ok: true,
+          session: getAuthState(runtime, state)
+        });
+        return;
+      }
+      if (method === "POST" && pathname === "/auth/session/setup") {
+        const body = await parseJsonBody(req);
+        const passphrase = normalizedString(body.passphrase);
+        if (!passphrase || passphrase.length < 8) {
+          sendError(res, 400, "AUTH_INVALID_PASSPHRASE", "passphrase must be at least 8 characters");
+          return;
+        }
+        if (hasEncryptedSecretStore()) {
+          sendError(res, 409, "AUTH_SECRET_STORE_EXISTS", "encrypted secret store already exists");
+          return;
+        }
+        const legacySecrets = Object.fromEntries(
+          Object.entries(readResolvedOpsSecrets(state))
+            .flatMap(([key, value]) => {
+              if (key === "transport") {
+                return [
+                  [OPS_SECRET_KEYS.transport_emailengine_access_token, value.emailengine.access_token],
+                  [OPS_SECRET_KEYS.transport_gmail_client_secret, value.gmail.client_secret],
+                  [OPS_SECRET_KEYS.transport_gmail_refresh_token, value.gmail.refresh_token]
+                ];
+              }
+              return [[key, value]];
+            })
+            .filter(([, value]) => normalizedString(value))
+        );
+        initializeSecretStore(state.secretsFile, passphrase, legacySecrets);
+        runtime.auth.unlockedSecrets = unlockOpsSecrets(passphrase);
+        runtime.auth.passphrase = passphrase;
+        runtime.auth.unlockedAt = nowIso();
+        state.config.buyer.api_key_configured = Boolean(runtime.auth.unlockedSecrets[OPS_SECRET_KEYS.buyer_api_key]);
+        scrubLegacySecrets(state);
+        state.env = saveOpsState(state);
+        const session = createAuthenticatedSession(runtime, passphrase, runtime.auth.unlockedSecrets);
+        appendSupervisorEvent({ type: "auth_session_setup" });
+        sendJson(res, 201, {
+          ok: true,
+          token: session.token,
+          expires_at: session.expires_at,
+          session: getAuthState(runtime, state)
+        });
+        return;
+      }
+      if (method === "POST" && pathname === "/auth/session/login") {
+        const body = await parseJsonBody(req);
+        const passphrase = normalizedString(body.passphrase);
+        if (!passphrase) {
+          sendError(res, 400, "AUTH_INVALID_PASSPHRASE", "passphrase is required");
+          return;
+        }
+        if (!hasEncryptedSecretStore()) {
+          sendError(res, 409, "AUTH_SECRET_STORE_MISSING", "encrypted secret store is not initialized yet");
+          return;
+        }
+        try {
+          const secrets = unlockOpsSecrets(passphrase);
+          const session = createAuthenticatedSession(runtime, passphrase, secrets);
+          appendSupervisorEvent({ type: "auth_session_login" });
+          sendJson(res, 200, {
+            ok: true,
+            token: session.token,
+            expires_at: session.expires_at,
+            session: getAuthState(runtime, state)
+          });
+        } catch (error) {
+          sendError(res, 401, "AUTH_INVALID_PASSPHRASE", error instanceof Error ? error.message : "secret_unlock_failed");
+        }
+        return;
+      }
+      if (method === "POST" && pathname === "/auth/session/logout") {
+        const token = readSessionToken(req);
+        if (token) {
+          runtime.auth.sessions.delete(token);
+        } else {
+          runtime.auth.sessions.clear();
+        }
+        pruneExpiredSessions(runtime);
+        appendSupervisorEvent({ type: "auth_session_logout" });
+        sendJson(res, 200, {
+          ok: true,
+          session: getAuthState(runtime, state)
+        });
+        return;
+      }
+      if (method === "POST" && pathname === "/auth/session/change-passphrase") {
+        if (!hasEncryptedSecretStore()) {
+          sendError(res, 409, "AUTH_SECRET_STORE_MISSING", "encrypted secret store is not initialized yet");
+          return;
+        }
+        const body = await parseJsonBody(req);
+        const nextPassphrase = normalizedString(body.next_passphrase);
+        if (!nextPassphrase || nextPassphrase.length < 8) {
+          sendError(res, 400, "AUTH_INVALID_PASSPHRASE", "next_passphrase must be at least 8 characters");
+          return;
+        }
+        const currentPassphrase = runtime.auth.passphrase || normalizedString(body.current_passphrase);
+        if (!currentPassphrase) {
+          sendError(res, 400, "AUTH_INVALID_PASSPHRASE", "current passphrase is required");
+          return;
+        }
+        try {
+          rotateSecretStorePassphrase(state.secretsFile, currentPassphrase, nextPassphrase);
+          const secrets = unlockOpsSecrets(nextPassphrase);
+          runtime.auth.passphrase = nextPassphrase;
+          runtime.auth.unlockedSecrets = secrets;
+          runtime.auth.unlockedAt = nowIso();
+          appendSupervisorEvent({ type: "auth_passphrase_rotated" });
+          sendJson(res, 200, {
+            ok: true,
+            session: getAuthState(runtime, state)
+          });
+        } catch (error) {
+          sendError(res, 401, "AUTH_INVALID_PASSPHRASE", error instanceof Error ? error.message : "passphrase_rotation_failed");
+        }
+        return;
+      }
       if (method === "GET" && pathname === "/status") {
         sendJson(res, 200, await buildStatus());
+        return;
+      }
+      if (method === "GET" && pathname === "/runtime/transport") {
+        sendJson(res, 200, getTransportResponse(state, runtime));
+        return;
+      }
+      if (method === "PUT" && pathname === "/runtime/transport") {
+        const body = await parseJsonBody(req);
+        const nextTransport = normalizeTransportPayload(body);
+        const validation = validateTransportConfig(nextTransport);
+        if (validation) {
+          sendJson(res, validation.status, validation.body);
+          return;
+        }
+        state.config.runtime ||= {};
+        state.config.runtime.transport = nextTransport;
+        const secretUpdates = buildTransportSecretUpdates(body);
+        if (hasEncryptedSecretStore()) {
+          if (Object.keys(secretUpdates).length > 0) {
+            writeOpsSecrets(runtime.auth.passphrase, secretUpdates);
+            runtime.auth.unlockedSecrets = unlockOpsSecrets(runtime.auth.passphrase);
+          }
+          scrubLegacySecrets(state);
+        } else if (Object.keys(secretUpdates).length > 0) {
+          state.env = {
+            ...state.env,
+            ...buildLegacyTransportSecretEnv(secretUpdates)
+          };
+        }
+        state.env = saveOpsState(state);
+        appendSupervisorEvent({
+          type: "transport_updated",
+          transport_type: nextTransport.type,
+          provider: nextTransport.type === "email" ? nextTransport.email.provider : null
+        });
+        sendJson(res, 200, getTransportResponse(state, runtime));
+        return;
+      }
+      if (method === "POST" && pathname === "/runtime/transport/test") {
+        const validation = validateTransportConfig(getRuntimeTransport(state));
+        if (validation) {
+          sendJson(res, validation.status, validation.body);
+          return;
+        }
+        const result = await testTransportConnection(state, runtime);
+        sendJson(res, result.ok ? 200 : result.status || 502, result);
         return;
       }
       if (method === "POST" && pathname === "/setup") {
@@ -487,7 +1211,7 @@ export function createOpsSupervisorServer() {
           processBaseUrl(state.config.runtime.ports.buyer),
           `/controller/catalog/subagents${url.search}`
         , {
-          headers: state.config.buyer.api_key ? { "X-Platform-Api-Key": state.config.buyer.api_key } : {}
+          headers: buildPlatformHeaders(state, runtime)
         });
         sendJson(res, response.status, response.body);
         return;
@@ -513,9 +1237,15 @@ export function createOpsSupervisorServer() {
         const body = await parseJsonBody(req);
         const response = await requestJson(processBaseUrl(state.config.runtime.ports.buyer), "/controller/remote-requests", {
           method: "POST",
-          headers: state.config.buyer.api_key ? { "X-Platform-Api-Key": state.config.buyer.api_key } : {},
+          headers: buildPlatformHeaders(state, runtime),
           body
         });
+        sendJson(res, response.status, response.body);
+        return;
+      }
+      if (method === "POST" && pathname === "/requests/example") {
+        const body = await parseJsonBody(req);
+        const response = await dispatchExampleRequest(body);
         sendJson(res, response.status, response.body);
         return;
       }
@@ -531,6 +1261,15 @@ export function createOpsSupervisorServer() {
       }
       if (method === "GET" && pathname === "/seller/subagents") {
         sendJson(res, 200, { items: state.config.seller.subagents || [] });
+        return;
+      }
+      if (method === "POST" && pathname === "/seller/subagents/example") {
+        const definition = await addOfficialExampleSubagent();
+        sendJson(res, 201, {
+          ...definition,
+          example: true,
+          message: `${LOCAL_EXAMPLE_DISPLAY_NAME} is configured locally`
+        });
         return;
       }
       if (method === "POST" && pathname === "/seller/subagents") {
@@ -651,6 +1390,7 @@ export function createOpsSupervisorServer() {
         });
         state.env = saveOpsState(state);
         const submitted = await submitPendingSellerReviews();
+        await reloadSellerIfRunning();
         appendSupervisorEvent({
           type: "seller_review_submitted",
           seller_id: state.config.seller.seller_id,

@@ -10,7 +10,10 @@
     "dev": "node --watch src/server.js"
   },
   "dependencies": {
+    "@croc/contracts": "0.1.0",
     "@croc/postgres-store": "0.1.0",
-    "@croc/sqlite-store": "0.1.0"
+    "@croc/runtime-utils": "0.1.0",
+    "@croc/sqlite-store": "0.1.0",
+    "@croc/transport-relay-http": "0.1.0"
   }
 }

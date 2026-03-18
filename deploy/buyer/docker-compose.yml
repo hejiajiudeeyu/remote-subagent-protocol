@@ -1,6 +1,6 @@
 services:
   buyer-controller:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-buyer:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-buyer:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -20,6 +20,7 @@ services:
       BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S: ${BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S:-15}
       BUYER_CONTROLLER_INBOX_POLL_INTERVAL_MS: ${BUYER_CONTROLLER_INBOX_POLL_INTERVAL_MS:-250}
       BUYER_CONTROLLER_EVENTS_SYNC_INTERVAL_MS: ${BUYER_CONTROLLER_EVENTS_SYNC_INTERVAL_MS:-250}
+      BUYER_CONTROLLER_EVENTS_SYNC_BATCH_SIZE: ${BUYER_CONTROLLER_EVENTS_SYNC_BATCH_SIZE:-25}
       DATABASE_URL: ${DATABASE_URL:-}
       SQLITE_DATABASE_PATH: ${SQLITE_DATABASE_PATH:-/data/buyer-controller.sqlite}
     extra_hosts:

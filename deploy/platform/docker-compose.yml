@@ -16,7 +16,7 @@ services:
       - platform-postgres-data:/var/lib/postgresql/data
 
   platform-api:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-platform:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-platform:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -26,10 +26,15 @@ services:
       PORT: ${PORT:-8080}
       SERVICE_NAME: platform-api
       DATABASE_URL: ${DATABASE_URL:-postgresql://croc:croc@postgres:5432/croc}
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       TOKEN_TTL_SECONDS: ${TOKEN_TTL_SECONDS:-300}
-      BOOTSTRAP_SELLER_ID: ${BOOTSTRAP_SELLER_ID:-seller_foxlab}
-      BOOTSTRAP_SUBAGENT_ID: ${BOOTSTRAP_SUBAGENT_ID:-foxlab.text.classifier.v1}
-      BOOTSTRAP_TASK_DELIVERY_ADDRESS: ${BOOTSTRAP_TASK_DELIVERY_ADDRESS:-local://relay/seller_foxlab/foxlab.text.classifier.v1}
+      PLATFORM_ADMIN_API_KEY: ${PLATFORM_ADMIN_API_KEY:-}
+      TRANSPORT_BASE_URL: ${TRANSPORT_BASE_URL:-}
+      REVIEW_TRANSPORT_BASE_URL: ${REVIEW_TRANSPORT_BASE_URL:-}
+      ENABLE_BOOTSTRAP_SELLERS: ${ENABLE_BOOTSTRAP_SELLERS:-false}
+      BOOTSTRAP_SELLER_ID: ${BOOTSTRAP_SELLER_ID:-}
+      BOOTSTRAP_SUBAGENT_ID: ${BOOTSTRAP_SUBAGENT_ID:-}
+      BOOTSTRAP_TASK_DELIVERY_ADDRESS: ${BOOTSTRAP_TASK_DELIVERY_ADDRESS:-}
       BOOTSTRAP_SELLER_API_KEY: ${BOOTSTRAP_SELLER_API_KEY:-}
       BOOTSTRAP_SELLER_PUBLIC_KEY_PEM: ${BOOTSTRAP_SELLER_PUBLIC_KEY_PEM:-}
       BOOTSTRAP_SELLER_PRIVATE_KEY_PEM: ${BOOTSTRAP_SELLER_PRIVATE_KEY_PEM:-}

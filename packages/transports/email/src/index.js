@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+export const RSP_EMAIL_SUBJECT_PREFIX = "[RSP]";
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -15,7 +17,7 @@ function deepClone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function normalizeAttachments(attachments = []) {
+export function normalizeAttachments(attachments = []) {
   return (Array.isArray(attachments) ? attachments : []).map((attachment, index) => {
     const contentBase64 = Buffer.isBuffer(attachment?.content)
       ? attachment.content.toString("base64")
@@ -31,7 +33,7 @@ function normalizeAttachments(attachments = []) {
   });
 }
 
-function normalizeEnvelope(envelope = {}) {
+export function normalizeEnvelope(envelope = {}) {
   const base = deepClone(envelope);
   const bodyText =
     typeof envelope.body_text === "string"
@@ -72,6 +74,30 @@ function normalizeEnvelope(envelope = {}) {
     result_package: envelope.result_package ? deepClone(envelope.result_package) : null,
     attachments: normalizeAttachments(envelope.attachments || payload?.attachments || []),
     sent_at: nowIso()
+  };
+}
+
+export function buildEmailSubject(envelope = {}) {
+  const normalized = normalizeEnvelope(envelope);
+  const type = normalized.type || "message";
+  const requestId = normalized.request_id || normalized.thread_id || normalized.message_id;
+  return `${RSP_EMAIL_SUBJECT_PREFIX} ${type} ${requestId}`;
+}
+
+export function isRspEmailSubject(subject) {
+  return typeof subject === "string" && subject.startsWith(`${RSP_EMAIL_SUBJECT_PREFIX} `);
+}
+
+export function buildRspHeaders(envelope = {}) {
+  const normalized = normalizeEnvelope(envelope);
+  return {
+    "X-RSP-Transport": "1",
+    "X-RSP-Request-Id": normalized.request_id || "",
+    "X-RSP-Thread-Id": normalized.thread_id || "",
+    "X-RSP-Message-Id": normalized.message_id || "",
+    "X-RSP-Type": normalized.type || "",
+    "X-RSP-From": normalized.from || "",
+    "X-RSP-To": normalized.to || ""
   };
 }
 

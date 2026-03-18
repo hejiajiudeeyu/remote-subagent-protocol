@@ -7,13 +7,18 @@ export function renderEntityCardsMarkup(items, type) {
     .map((item) => {
       const id = type === "sellers" ? item.seller_id : item.subagent_id;
       const status = item.status || item.availability_status || "unknown";
-      const actions =
-        item.status === "disabled"
-          ? `
-            <button data-type="${type}" data-id="${id}" data-action="approve">Approve</button>
-            <button data-type="${type}" data-id="${id}" data-action="reject" class="ghost">Reject</button>
-          `
-          : `<button data-type="${type}" data-id="${id}" data-action="disable">Disable</button>`;
+      const reviewStatus = item.review_status || "pending";
+      const latestReviewTest = item.latest_review_test;
+      let actions = `
+        <button data-type="${type}" data-id="${id}" data-action="approve">Approve</button>
+        <button data-type="${type}" data-id="${id}" data-action="reject" class="ghost">Reject</button>
+      `;
+      if (reviewStatus === "approved") {
+        actions =
+          item.status === "disabled"
+            ? `<button data-type="${type}" data-id="${id}" data-action="enable">Enable</button>`
+            : `<button data-type="${type}" data-id="${id}" data-action="disable">Disable</button>`;
+      }
       return `
         <article class="item-card" data-detail-type="${type}" data-detail-id="${id}">
           <div class="item-head">
@@ -23,7 +28,19 @@ export function renderEntityCardsMarkup(items, type) {
             </div>
             <span class="status ${status}">${status}</span>
           </div>
-          <p class="meta">${type === "sellers" ? `${item.subagent_count} subagents` : `${(item.capabilities || []).join(", ") || "no capabilities"}`}</p>
+          <p class="meta">
+            Review: ${reviewStatus}
+            ${
+              type === "sellers"
+                ? ` · ${item.subagent_count} subagents`
+                : ` · ${item.catalog_visibility || "hidden"} · v${item.submission_version || 1}`
+            }
+          </p>
+          ${
+            type === "subagents" && latestReviewTest
+              ? `<p class="meta">Latest review test: ${latestReviewTest.verdict || latestReviewTest.status}${latestReviewTest.failure_code ? ` · ${latestReviewTest.failure_code}` : ""}</p>`
+              : `<p class="meta">${type === "sellers" ? (item.subagents || []).map((subagent) => subagent.subagent_id).join(", ") || "no subagents" : `${(item.capabilities || []).join(", ") || "no capabilities"}`}</p>`
+          }
           <div class="actions">
             ${actions}
           </div>
@@ -163,11 +180,14 @@ export function renderReviewerGuidance(item) {
   const target = item.subagent_id || item.seller_id || item.target_id || "selected item";
   const status = item.review_status || item.status || "unknown";
   const hints = [];
-  if (status === "disabled") {
+  if (item.status === "disabled" && item.review_status === "approved") {
     hints.push("Disabled resources should include a clear re-enable condition or operator follow-up note.");
   }
   if (status === "pending") {
     hints.push("Pending reviews should capture what was checked and what remains unresolved.");
+  }
+  if (item.latest_review_test?.verdict === "fail") {
+    hints.push(`Latest review test failed: ${item.latest_review_test.failure_code || item.latest_review_test.result_summary}.`);
   }
   if (item.capabilities?.length) {
     hints.push(`Confirm capabilities match the declared scope: ${item.capabilities.join(", ")}.`);
@@ -197,7 +217,8 @@ export function renderReviewActionSummary(item, reviewerNotes = "", history = []
   }
   const status = item.status || "unknown";
   const latestReason = history.find((entry) => entry.reason)?.reason || "No prior reason recorded.";
-  const recommendedAction = status === "disabled" ? "approve or reject" : "disable";
+  const recommendedAction =
+    item.review_status !== "approved" ? "approve or reject" : status === "disabled" ? "enable" : "disable";
   return `
     <article class="item-card">
       <div class="item-head">
@@ -210,6 +231,11 @@ export function renderReviewActionSummary(item, reviewerNotes = "", history = []
       <p class="meta">Recommended action: ${recommendedAction}</p>
       <p class="meta">Current note: ${reviewerNotes || "No reviewer notes entered yet."}</p>
       <p class="meta">Latest reason: ${latestReason}</p>
+      ${
+        item.latest_review_test
+          ? `<p class="meta">Latest review test: ${item.latest_review_test.verdict || item.latest_review_test.status}${item.latest_review_test.failure_code ? ` · ${item.latest_review_test.failure_code}` : ""}</p>`
+          : ""
+      }
     </article>
   `;
 }

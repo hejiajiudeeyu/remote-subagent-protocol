@@ -1,0 +1,11 @@
+{
+  "name": "@croc/transport-gmail",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.js",
+  "exports": "./src/index.js",
+  "dependencies": {
+    "@croc/transport-email": "0.1.0"
+  }
+}

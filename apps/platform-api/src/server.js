@@ -3,9 +3,11 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
 import { createPostgresSnapshotStore } from "@croc/postgres-store";
 import { createSqliteSnapshotStore } from "@croc/sqlite-store";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "../../../scripts/env-files.mjs";
+import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,6 +22,17 @@ loadEnvFiles([
 const HEARTBEAT_INTERVAL_S = 30;
 const DEGRADED_THRESHOLD_S = 90;
 const OFFLINE_THRESHOLD_S = 180;
+const REVIEW_TEST_BUYER_ID = "buyer_review_bot";
+const REVIEW_TEST_RECEIVER_PREFIX = "platform-review-bot";
+const DEFAULT_REQUEST_EVENT_HISTORY_LIMIT = 200;
+const DEFAULT_TELEMETRY_HISTORY_LIMIT = 5000;
+const DEFAULT_SUBAGENT_QUOTA_PER_SELLER = 25;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
+
+function readNumberEnv(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 function nowIso() {
   return new Date().toISOString();
@@ -62,8 +75,8 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
-  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+function sendError(res, statusCode, code, message, { retryable, ...extra } = {}) {
+  sendJson(res, statusCode, buildStructuredError(code, message, { retryable, ...extra }));
 }
 
 function encodeBase64Url(input) {
@@ -112,6 +125,20 @@ function decodePemEnv(value) {
   return value.replace(/\\n/g, "\n");
 }
 
+function readBooleanEnv(value, defaultValue = false) {
+  if (value === undefined || value === null || value === "") {
+    return defaultValue;
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(normalized)) {
+    return false;
+  }
+  return defaultValue;
+}
+
 function createSellerIdentity({
   sellerId,
   subagentId,
@@ -152,6 +179,13 @@ function createSellerIdentity({
       api_key: sellerApiKey,
       scopes: ["seller"],
       subagent_ids: [subagentId],
+      status: "enabled",
+      review_status: "approved",
+      reviewed_at: lastHeartbeatAt,
+      reviewed_by: "system",
+      review_reason: "bootstrap",
+      seller_public_key_pem: keyPair.publicKeyPem,
+      seller_public_keys_pem: [keyPair.publicKeyPem],
       last_heartbeat_at: lastHeartbeatAt,
       availability_status: "healthy",
       contact_email: contactEmail || `${sellerId}@test.local`,
@@ -162,6 +196,12 @@ function createSellerIdentity({
       subagent_id: subagentId,
       display_name: displayName,
       status: "enabled",
+      review_status: "approved",
+      submission_version: 1,
+      submitted_at: lastHeartbeatAt,
+      reviewed_at: lastHeartbeatAt,
+      reviewed_by: "system",
+      review_reason: "bootstrap",
       availability_status: "healthy",
       last_heartbeat_at: lastHeartbeatAt,
       template_ref: templateRef,
@@ -171,6 +211,7 @@ function createSellerIdentity({
       input_schema: inputSchema,
       output_schema: outputSchema,
       seller_public_key_pem: keyPair.publicKeyPem,
+      seller_public_keys_pem: [keyPair.publicKeyPem],
       task_delivery_address: taskDeliveryAddress
     },
     signing: {
@@ -206,6 +247,10 @@ function sanitizeCatalogItem(item) {
   return publicItem;
 }
 
+function cloneValue(value) {
+  return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
+}
+
 function buildAvailability(lastHeartbeatAt) {
   const ageSeconds = (Date.now() - new Date(lastHeartbeatAt).getTime()) / 1000;
   if (ageSeconds > OFFLINE_THRESHOLD_S) {
@@ -222,6 +267,226 @@ function resolveCatalogAvailability(item) {
     return item.availability_status;
   }
   return buildAvailability(item.last_heartbeat_at);
+}
+
+function pushCapped(array, value, limit = DEFAULT_TELEMETRY_HISTORY_LIMIT) {
+  array.push(value);
+  const max = Math.max(1, Number(limit || DEFAULT_TELEMETRY_HISTORY_LIMIT));
+  if (array.length > max) {
+    array.splice(0, array.length - max);
+  }
+  return value;
+}
+
+function buildPlatformLimits() {
+  return {
+    requestEventHistory: readNumberEnv(process.env.PLATFORM_REQUEST_EVENT_HISTORY_LIMIT, DEFAULT_REQUEST_EVENT_HISTORY_LIMIT),
+    telemetryHistory: readNumberEnv(process.env.PLATFORM_TELEMETRY_HISTORY_LIMIT, DEFAULT_TELEMETRY_HISTORY_LIMIT),
+    subagentsPerSeller: readNumberEnv(process.env.PLATFORM_SUBAGENT_QUOTA_PER_SELLER, DEFAULT_SUBAGENT_QUOTA_PER_SELLER)
+  };
+}
+
+function requestEventHistoryLimit(state) {
+  return state.limits?.requestEventHistory || DEFAULT_REQUEST_EVENT_HISTORY_LIMIT;
+}
+
+function telemetryHistoryLimit(state) {
+  return state.limits?.telemetryHistory || DEFAULT_TELEMETRY_HISTORY_LIMIT;
+}
+
+function getClientAddress(req) {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (typeof forwarded === "string" && forwarded.trim()) {
+    return forwarded.split(",")[0].trim();
+  }
+  if (Array.isArray(forwarded) && forwarded[0]) {
+    return String(forwarded[0]).split(",")[0].trim();
+  }
+  return req.socket?.remoteAddress || "unknown";
+}
+
+function buildRateLimitConfig() {
+  return {
+    windowMs: readNumberEnv(process.env.PUBLIC_RATE_LIMIT_WINDOW_MS, DEFAULT_RATE_LIMIT_WINDOW_MS),
+    registerUserMax: readNumberEnv(process.env.PUBLIC_RATE_LIMIT_REGISTER_USER_MAX, 1000),
+    registerSellerMax: readNumberEnv(process.env.PUBLIC_RATE_LIMIT_REGISTER_SELLER_MAX, 1000),
+    catalogSubmitMax: readNumberEnv(process.env.PUBLIC_RATE_LIMIT_CATALOG_SUBMIT_MAX, 1000)
+  };
+}
+
+function createRateLimiter(config = buildRateLimitConfig()) {
+  const counters = new Map();
+
+  function allow(routeKey, identity) {
+    const windowMs = Math.max(1000, config.windowMs || DEFAULT_RATE_LIMIT_WINDOW_MS);
+    const limit = config[routeKey];
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return { ok: true };
+    }
+    const now = Date.now();
+    const bucketKey = `${routeKey}:${identity}`;
+    const bucket = counters.get(bucketKey) || [];
+    const active = bucket.filter((timestamp) => now - timestamp < windowMs);
+    if (active.length >= limit) {
+      counters.set(bucketKey, active);
+      return {
+        ok: false,
+        retryAfterMs: Math.max(1000, windowMs - (now - active[0]))
+      };
+    }
+    active.push(now);
+    counters.set(bucketKey, active);
+    return { ok: true };
+  }
+
+  return {
+    config,
+    allow
+  };
+}
+
+function requestIdentityForRateLimit(req, auth = null) {
+  return `${getClientAddress(req)}:${auth?.user_id || auth?.seller_id || auth?.admin_id || "anonymous"}`;
+}
+
+function buildReviewTransportConfig() {
+  const baseUrl = process.env.REVIEW_TRANSPORT_BASE_URL || process.env.TRANSPORT_BASE_URL || null;
+  if (!baseUrl) {
+    return null;
+  }
+  return {
+    baseUrl,
+    receiver: REVIEW_TEST_RECEIVER_PREFIX
+  };
+}
+
+function createReviewTransport() {
+  const config = buildReviewTransportConfig();
+  if (!config) {
+    return null;
+  }
+  return createRelayHttpTransportAdapter(config);
+}
+
+function buildReviewResultReceiver(requestId) {
+  return `${REVIEW_TEST_RECEIVER_PREFIX}-${requestId}`;
+}
+
+function buildReviewResultAddress(requestId) {
+  return `local://relay/${buildReviewResultReceiver(requestId)}/${requestId}`;
+}
+
+function isSellerRoutable(seller) {
+  return seller?.review_status === "approved" && seller?.status === "enabled";
+}
+
+function isSubagentRoutable(item) {
+  return item?.review_status === "approved" && item?.status === "enabled";
+}
+
+function resolveCatalogVisibility(state, item) {
+  if (!item) {
+    return "hidden";
+  }
+  const seller = state.sellers.get(item.seller_id);
+  return isSellerRoutable(seller) && isSubagentRoutable(item) ? "public" : "hidden";
+}
+
+function isOperatorAuth(auth, state) {
+  if (!auth) {
+    return false;
+  }
+  if (auth.type === "admin") {
+    return true;
+  }
+  if (auth.type !== "buyer") {
+    return false;
+  }
+  const user = state.users.get(auth.user_id);
+  return (user?.roles || []).includes("admin");
+}
+
+function canManageSeller(auth, seller) {
+  if (!auth || !seller) {
+    return false;
+  }
+  if (auth.type === "buyer") {
+    return seller.owner_user_id === auth.user_id;
+  }
+  if (auth.type === "seller") {
+    return auth.seller_id === seller.seller_id;
+  }
+  return false;
+}
+
+function canViewCatalogItemDetail(state, auth, item) {
+  if (!item) {
+    return false;
+  }
+  if (resolveCatalogVisibility(state, item) === "public") {
+    return true;
+  }
+  if (isOperatorAuth(auth, state)) {
+    return true;
+  }
+  const seller = state.sellers.get(item.seller_id);
+  return canManageSeller(auth, seller) || (auth?.type === "seller" && auth.subagent_ids?.includes(item.subagent_id));
+}
+
+function sanitizeCatalogItemForResponse(state, item) {
+  return {
+    ...sanitizeCatalogItem(item),
+    catalog_visibility: resolveCatalogVisibility(state, item)
+  };
+}
+
+function summarizeReviewTest(reviewTest) {
+  if (!reviewTest) {
+    return null;
+  }
+  return {
+    request_id: reviewTest.request_id,
+    seller_id: reviewTest.seller_id,
+    subagent_id: reviewTest.subagent_id,
+    status: reviewTest.status,
+    verdict: reviewTest.verdict,
+    failure_code: reviewTest.failure_code || null,
+    started_at: reviewTest.started_at,
+    finished_at: reviewTest.finished_at || null,
+    result_summary: reviewTest.result_summary || null
+  };
+}
+
+function findLatestReviewTest(state, subagentId) {
+  const matches = Array.from(state.reviewTests.values())
+    .filter((item) => item.subagent_id === subagentId)
+    .sort((left, right) => String(right.started_at || "").localeCompare(String(left.started_at || "")));
+  return matches[0] || null;
+}
+
+function buildCatalogDetail(state, item) {
+  const submission = state.submissions.get(item.subagent_id) || null;
+  return {
+    ...item,
+    catalog_visibility: resolveCatalogVisibility(state, item),
+    latest_review_test: summarizeReviewTest(findLatestReviewTest(state, item.subagent_id)),
+    submission:
+      submission && {
+        submission_version: submission.submission_version,
+        submitted_at: submission.submitted_at,
+        submitted_by: submission.submitted_by,
+        review_reason: submission.review_reason || null,
+        submitted_payload: cloneValue(submission.submitted_payload)
+      }
+  };
+}
+
+function buildCatalogAdminSummary(state, item) {
+  return {
+    ...item,
+    catalog_visibility: resolveCatalogVisibility(state, item),
+    latest_review_test: summarizeReviewTest(findLatestReviewTest(state, item.subagent_id))
+  };
 }
 
 function normalizeStringList(value) {
@@ -279,6 +544,116 @@ function addUserRole(state, userId, role) {
   return user;
 }
 
+function revokeApiKey(state, apiKey) {
+  const record = state.apiKeys.get(apiKey);
+  if (!record) {
+    return null;
+  }
+  state.apiKeys.delete(apiKey);
+  if (record.type === "buyer") {
+    const user = state.users.get(record.user_id);
+    if (user?.api_key === apiKey) {
+      user.api_key = null;
+    }
+  }
+  if (record.type === "seller") {
+    const seller = state.sellers.get(record.seller_id);
+    if (seller?.api_key === apiKey) {
+      seller.api_key = null;
+    }
+  }
+  return record;
+}
+
+function rotateBuyerApiKey(state, userId) {
+  const user = state.users.get(userId);
+  if (!user) {
+    return null;
+  }
+  if (user.api_key) {
+    revokeApiKey(state, user.api_key);
+  }
+  const apiKey = `sk_buyer_${crypto.randomBytes(12).toString("hex")}`;
+  user.api_key = apiKey;
+  state.apiKeys.set(apiKey, {
+    type: "buyer",
+    user_id: user.user_id,
+    scopes: ["buyer", ...(user.roles || []).filter((role) => role !== "buyer")]
+  });
+  return {
+    user_id: user.user_id,
+    api_key: apiKey,
+    roles: user.roles
+  };
+}
+
+function rotateSellerApiKey(state, sellerId) {
+  const seller = state.sellers.get(sellerId);
+  if (!seller) {
+    return null;
+  }
+  if (seller.api_key) {
+    revokeApiKey(state, seller.api_key);
+  }
+  const apiKey = `sk_seller_${crypto.randomBytes(12).toString("hex")}`;
+  seller.api_key = apiKey;
+  state.apiKeys.set(apiKey, {
+    type: "seller",
+    seller_id: seller.seller_id,
+    owner_user_id: seller.owner_user_id,
+    scopes: seller.scopes,
+    subagent_ids: seller.subagent_ids
+  });
+  return {
+    seller_id: seller.seller_id,
+    api_key: apiKey,
+    subagent_ids: seller.subagent_ids
+  };
+}
+
+function rotateSellerSigningKey(state, sellerId, body = {}) {
+  const seller = state.sellers.get(sellerId);
+  if (!seller) {
+    return null;
+  }
+  const nextPublicKeyPem = body.seller_public_key_pem || body.next_public_key_pem;
+  if (!nextPublicKeyPem) {
+    return {
+      error: {
+        code: "CONTRACT_INVALID_SIGNING_KEY_ROTATION",
+        message: "seller_public_key_pem is required",
+        retryable: false
+      },
+      statusCode: 400
+    };
+  }
+  const previousKeys = Array.isArray(body.previous_public_keys_pem)
+    ? body.previous_public_keys_pem.filter(Boolean)
+    : seller.seller_public_key_pem
+      ? [seller.seller_public_key_pem]
+      : [];
+  const allKeys = Array.from(new Set([nextPublicKeyPem, ...previousKeys]));
+  seller.seller_public_key_pem = nextPublicKeyPem;
+  seller.seller_public_keys_pem = allKeys;
+  seller.signing_key_rotation_window_until = body.rotation_window_until || null;
+
+  for (const item of state.catalog.values()) {
+    if (item.seller_id !== sellerId) {
+      continue;
+    }
+    item.seller_public_key_pem = nextPublicKeyPem;
+    item.seller_public_keys_pem = allKeys;
+    item.signing_key_rotation_window_until = body.rotation_window_until || null;
+  }
+
+  return {
+    seller_id: sellerId,
+    seller_public_key_pem: nextPublicKeyPem,
+    seller_public_keys_pem: allKeys,
+    rotation_window_until: body.rotation_window_until || null
+  };
+}
+
 async function persistPlatformState(onStateChanged, state) {
   if (typeof onStateChanged === "function") {
     await onStateChanged(state);
@@ -286,10 +661,14 @@ async function persistPlatformState(onStateChanged, state) {
 }
 
 export function createPlatformState(options = {}) {
-  const tokenSecret = options.tokenSecret || crypto.randomBytes(32);
+  const tokenSecret = options.tokenSecret || process.env.TOKEN_SECRET || crypto.randomBytes(32);
   const tokenTtlSeconds = Number(options.tokenTtlSeconds || process.env.TOKEN_TTL_SECONDS || 300);
   const adminApiKey =
     options.adminApiKey || process.env.PLATFORM_ADMIN_API_KEY || `sk_admin_${crypto.randomBytes(12).toString("hex")}`;
+  const bootstrapEnabled =
+    options.bootstrapEnabled !== undefined
+      ? Boolean(options.bootstrapEnabled)
+      : readBooleanEnv(process.env.ENABLE_BOOTSTRAP_SELLERS, true);
   const bootstrapSellerSigning =
     process.env.BOOTSTRAP_SELLER_PUBLIC_KEY_PEM && process.env.BOOTSTRAP_SELLER_PRIVATE_KEY_PEM
       ? {
@@ -298,31 +677,34 @@ export function createPlatformState(options = {}) {
         }
       : null;
 
-  const bootstrapSellers = [
-    createSellerIdentity({
-      sellerId: process.env.BOOTSTRAP_SELLER_ID || "seller_foxlab",
-      subagentId: process.env.BOOTSTRAP_SUBAGENT_ID || "foxlab.text.classifier.v1",
-      templateRef: "foxlab/text-classifier@v1",
-      displayName: "Foxlab Text Classifier",
-      taskDeliveryAddress: process.env.BOOTSTRAP_TASK_DELIVERY_ADDRESS || "local://relay/seller_foxlab/foxlab.text.classifier.v1",
-      taskTypes: ["text_classify"],
-      capabilities: ["text.classify", "document.classify"],
-      tags: ["nlp", "classification"],
-      apiKey: process.env.BOOTSTRAP_SELLER_API_KEY || null,
-      ownerUserId: process.env.BOOTSTRAP_SELLER_OWNER_USER_ID || null,
-      signing: bootstrapSellerSigning
-    }),
-    createSellerIdentity({
-      sellerId: "seller_northwind",
-      subagentId: "northwind.copywriter.v1",
-      templateRef: "northwind/copywriter@v1",
-      displayName: "Northwind Copywriter",
-      taskDeliveryAddress: "local://relay/seller_northwind/northwind.copywriter.v1",
-      taskTypes: ["copywrite"],
-      capabilities: ["marketing.copywrite", "text.generate"],
-      tags: ["marketing", "copywriting"]
-    })
-  ];
+  const bootstrapSellers = bootstrapEnabled
+    ? [
+        createSellerIdentity({
+          sellerId: process.env.BOOTSTRAP_SELLER_ID || "seller_foxlab",
+          subagentId: process.env.BOOTSTRAP_SUBAGENT_ID || "foxlab.text.classifier.v1",
+          templateRef: "foxlab/text-classifier@v1",
+          displayName: "Foxlab Text Classifier",
+          taskDeliveryAddress:
+            process.env.BOOTSTRAP_TASK_DELIVERY_ADDRESS || "local://relay/seller_foxlab/foxlab.text.classifier.v1",
+          taskTypes: ["text_classify"],
+          capabilities: ["text.classify", "document.classify"],
+          tags: ["nlp", "classification"],
+          apiKey: process.env.BOOTSTRAP_SELLER_API_KEY || null,
+          ownerUserId: process.env.BOOTSTRAP_SELLER_OWNER_USER_ID || null,
+          signing: bootstrapSellerSigning
+        }),
+        createSellerIdentity({
+          sellerId: "seller_northwind",
+          subagentId: "northwind.copywriter.v1",
+          templateRef: "northwind/copywriter@v1",
+          displayName: "Northwind Copywriter",
+          taskDeliveryAddress: "local://relay/seller_northwind/northwind.copywriter.v1",
+          taskTypes: ["copywrite"],
+          capabilities: ["marketing.copywrite", "text.generate"],
+          tags: ["marketing", "copywriting"]
+        })
+      ]
+    : [];
 
   const users = new Map();
   const apiKeys = new Map();
@@ -330,6 +712,8 @@ export function createPlatformState(options = {}) {
   const catalog = new Map();
   const templates = new Map();
   const requests = new Map();
+  const submissions = new Map();
+  const reviewTests = new Map();
   const metricsEvents = [];
   const auditEvents = [];
   const reviewEvents = [];
@@ -362,12 +746,15 @@ export function createPlatformState(options = {}) {
   return {
     tokenSecret,
     tokenTtlSeconds,
+    limits: options.limits || buildPlatformLimits(),
     users,
     apiKeys,
     sellers,
     catalog,
     templates,
     requests,
+    submissions,
+    reviewTests,
     metricsEvents,
     auditEvents,
     reviewEvents,
@@ -391,6 +778,8 @@ export function serializePlatformState(state) {
     catalog: Array.from(state.catalog.entries()),
     templates: Array.from(state.templates.entries()),
     requests: Array.from(state.requests.entries()),
+    submissions: Array.from(state.submissions.entries()),
+    reviewTests: Array.from(state.reviewTests.entries()),
     metricsEvents: state.metricsEvents,
     auditEvents: state.auditEvents,
     reviewEvents: state.reviewEvents
@@ -408,7 +797,9 @@ export function hydratePlatformState(state, snapshot) {
     ["sellers", state.sellers],
     ["catalog", state.catalog],
     ["templates", state.templates],
-    ["requests", state.requests]
+    ["requests", state.requests],
+    ["submissions", state.submissions],
+    ["reviewTests", state.reviewTests]
   ]) {
     collection.clear();
     for (const [key, value] of snapshot[name] || []) {
@@ -556,11 +947,11 @@ function normalizeResultDelivery(input = {}) {
 }
 
 function appendRequestEvent(request, eventType, detail = {}) {
-  request.events.push({
+  pushCapped(request.events, {
     at: nowIso(),
     event_type: eventType,
     ...detail
-  });
+  }, readNumberEnv(process.env.PLATFORM_REQUEST_EVENT_HISTORY_LIMIT, DEFAULT_REQUEST_EVENT_HISTORY_LIMIT));
 }
 
 function findMatchingRequestEvent(request, { eventType, sellerId, subagentId }) {
@@ -569,14 +960,17 @@ function findMatchingRequestEvent(request, { eventType, sellerId, subagentId }) 
   );
 }
 
-function buildSellerAdminSummary(seller, catalogItems = []) {
-  const runtimeStatus = catalogItems.some((item) => item.status === "enabled") ? "enabled" : "disabled";
+function buildSellerAdminSummary(state, seller, catalogItems = []) {
   return {
     seller_id: seller.seller_id,
     owner_user_id: seller.owner_user_id,
     contact_email: seller.contact_email,
     support_email: seller.support_email,
-    status: runtimeStatus,
+    status: seller.status || "disabled",
+    review_status: seller.review_status || "pending",
+    reviewed_at: seller.reviewed_at || null,
+    reviewed_by: seller.reviewed_by || null,
+    review_reason: seller.review_reason || null,
     availability_status: seller.availability_status,
     last_heartbeat_at: seller.last_heartbeat_at,
     subagent_ids: seller.subagent_ids,
@@ -585,6 +979,8 @@ function buildSellerAdminSummary(seller, catalogItems = []) {
       subagent_id: item.subagent_id,
       display_name: item.display_name,
       status: item.status,
+      review_status: item.review_status || "pending",
+      catalog_visibility: resolveCatalogVisibility(state, item),
       availability_status: resolveCatalogAvailability(item),
       task_types: item.task_types || [],
       capabilities: item.capabilities || [],
@@ -599,24 +995,11 @@ function buildRequestAdminSummary(request) {
     buyer_id: request.buyer_id,
     seller_id: request.seller_id,
     subagent_id: request.subagent_id,
+    request_kind: request.request_kind || "remote_request",
+    request_visibility: request.request_visibility || "public",
     event_count: Array.isArray(request.events) ? request.events.length : 0,
     latest_event: Array.isArray(request.events) && request.events.length > 0 ? request.events[request.events.length - 1] : null
   };
-}
-
-function setSellerCatalogStatus(state, sellerId, status) {
-  const seller = state.sellers.get(sellerId);
-  if (!seller) {
-    return null;
-  }
-
-  for (const item of state.catalog.values()) {
-    if (item.seller_id === sellerId) {
-      item.status = status;
-    }
-  }
-
-  return seller;
 }
 
 function describeActor(auth) {
@@ -633,7 +1016,7 @@ function describeActor(auth) {
 }
 
 function appendAuditEvent(state, auth, action, target, detail = {}) {
-  state.auditEvents.push({
+  pushCapped(state.auditEvents, {
     id: randomId("audit"),
     action,
     target_type: target.type,
@@ -641,11 +1024,11 @@ function appendAuditEvent(state, auth, action, target, detail = {}) {
     recorded_at: nowIso(),
     ...describeActor(auth),
     ...detail
-  });
+  }, telemetryHistoryLimit(state));
 }
 
 function appendReviewEvent(state, auth, reviewStatus, target, detail = {}) {
-  state.reviewEvents.push({
+  pushCapped(state.reviewEvents, {
     id: randomId("review"),
     review_status: reviewStatus,
     target_type: target.type,
@@ -653,7 +1036,203 @@ function appendReviewEvent(state, auth, reviewStatus, target, detail = {}) {
     recorded_at: nowIso(),
     ...describeActor(auth),
     ...detail
+  }, telemetryHistoryLimit(state));
+}
+
+function buildSubmissionPayload(body) {
+  return {
+    seller_id: body.seller_id,
+    subagent_id: body.subagent_id,
+    display_name: body.display_name,
+    description: body.description || null,
+    template_ref: body.template_ref || `${body.subagent_id}@v1`,
+    seller_public_key_pem: body.seller_public_key_pem,
+    task_delivery_address: body.task_delivery_address || `local://relay/${body.seller_id}/${body.subagent_id}`,
+    task_types: normalizeStringList(body.task_types),
+    capabilities: normalizeStringList(body.capabilities),
+    tags: normalizeStringList(body.tags),
+    input_schema: body.input_schema || null,
+    output_schema: body.output_schema || null,
+    contact_email: body.contact_email || null,
+    support_email: body.support_email || null
+  };
+}
+
+function determineSubmissionVersion(state, subagentId) {
+  const current = state.submissions.get(subagentId);
+  return Number(current?.submission_version || 0) + 1;
+}
+
+function createTaskClaims(state, {
+  buyerId,
+  requestId,
+  sellerId,
+  subagentId,
+  requestKind = "remote_request"
+}) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const tokenTtlSeconds = Number(process.env.TOKEN_TTL_SECONDS || state.tokenTtlSeconds);
+  const claims = {
+    iss: "croc-platform-api",
+    sub: buyerId,
+    aud: sellerId,
+    jti: randomId("tok"),
+    iat: issuedAt,
+    exp: issuedAt + tokenTtlSeconds,
+    buyer_id: buyerId,
+    request_id: requestId,
+    seller_id: sellerId,
+    subagent_id: subagentId,
+    request_kind: requestKind
+  };
+  return {
+    claims,
+    task_token: signToken(state.tokenSecret, claims)
+  };
+}
+
+function createDeliveryMeta(state, request, catalogItem, resultDelivery) {
+  request.expected_signer_public_key_pem = catalogItem.seller_public_key_pem;
+  request.delivery_meta = {
+    request_id: request.request_id,
+    seller_id: catalogItem.seller_id,
+    subagent_id: catalogItem.subagent_id,
+    task_delivery: {
+      kind: catalogItem.task_delivery_address.startsWith("local://") ? "local" : "email",
+      address: catalogItem.task_delivery_address,
+      thread_hint: `req:${request.request_id}`
+    },
+    result_delivery: {
+      kind: resultDelivery.kind,
+      address: resultDelivery.address,
+      thread_hint: `req:${request.request_id}`
+    },
+    verification: {
+      display_code: request.delivery_meta?.verification?.display_code || createDisplayCode()
+    },
+    seller_public_key_pem: catalogItem.seller_public_key_pem
+  };
+  return request.delivery_meta;
+}
+
+function extractResultPackageFromEnvelope(envelope) {
+  if (!envelope || typeof envelope !== "object") {
+    return null;
+  }
+  if (envelope.result_package) {
+    return envelope.result_package;
+  }
+  if (envelope.payload?.result_package) {
+    return envelope.payload.result_package;
+  }
+  if (typeof envelope.body_text === "string" && envelope.body_text.trim()) {
+    try {
+      return JSON.parse(envelope.body_text);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function verifyReviewResult(request, resultPackage) {
+  if (!resultPackage || typeof resultPackage !== "object") {
+    return { ok: false, code: "RESULT_BODY_INVALID_JSON", summary: "review test result body is missing or invalid" };
+  }
+  if (
+    resultPackage.request_id !== request.request_id ||
+    resultPackage.seller_id !== request.seller_id ||
+    resultPackage.subagent_id !== request.subagent_id
+  ) {
+    return { ok: false, code: "RESULT_CONTEXT_MISMATCH", summary: "review test result does not match request context" };
+  }
+  if (resultPackage.result_version && resultPackage.result_version !== "0.1.0") {
+    return { ok: false, code: "RESULT_CONTEXT_MISMATCH", summary: "unsupported result version for review test" };
+  }
+  if (request.delivery_meta?.verification?.display_code) {
+    if (resultPackage.verification?.display_code !== request.delivery_meta.verification.display_code) {
+      return { ok: false, code: "RESULT_CONTEXT_MISMATCH", summary: "review test verification code mismatch" };
+    }
+  }
+  if (!resultPackage.signature_base64 || !request.expected_signer_public_key_pem) {
+    return { ok: false, code: "RESULT_SIGNATURE_INVALID", summary: "review test signature is missing" };
+  }
+  try {
+    const signingBytes = Buffer.from(JSON.stringify(canonicalizeResultPackageForSignature(resultPackage)), "utf8");
+    const signature = Buffer.from(resultPackage.signature_base64, "base64");
+    const publicKey = crypto.createPublicKey(request.expected_signer_public_key_pem);
+    const verified = crypto.verify(null, signingBytes, publicKey, signature);
+    if (!verified) {
+      return { ok: false, code: "RESULT_SIGNATURE_INVALID", summary: "review test signature validation failed" };
+    }
+  } catch {
+    return { ok: false, code: "RESULT_SIGNATURE_INVALID", summary: "review test signature validation failed" };
+  }
+  if (resultPackage.schema_valid === false) {
+    return { ok: false, code: "RESULT_SCHEMA_INVALID", summary: "review test returned schema_valid=false" };
+  }
+  if (resultPackage.status !== "ok") {
+    return {
+      ok: false,
+      code: resultPackage.error?.code || "EXEC_UNKNOWN",
+      summary: resultPackage.error?.message || "review test execution returned error status"
+    };
+  }
+  return {
+    ok: true,
+    code: null,
+    summary: resultPackage.output ? JSON.stringify(resultPackage.output) : "review test passed"
+  };
+}
+
+async function runReviewTestHarness(state, reviewTest, request, transport, onStateChanged) {
+  const receiver = buildReviewResultReceiver(request.request_id);
+  const timeoutMs = Number(reviewTest.timeout_ms || Math.max(5000, Number(reviewTest.constraints?.hard_timeout_s || 10) * 1000));
+  const deadline = Date.now() + timeoutMs;
+
+  await transport.send({
+    message_id: `msg_review_${crypto.randomUUID()}`,
+    thread_id: `req:${request.request_id}`,
+    from: REVIEW_TEST_BUYER_ID,
+    to: request.delivery_meta.task_delivery.address,
+    type: "task.requested",
+    request_id: request.request_id,
+    seller_id: request.seller_id,
+    subagent_id: request.subagent_id,
+    task_token: reviewTest.task_token,
+    result_delivery: request.delivery_meta.result_delivery,
+    verification: request.delivery_meta.verification,
+    payload: reviewTest.task_input,
+    task_input: reviewTest.task_input,
+    constraints: reviewTest.constraints || null,
+    sent_at: nowIso()
   });
+
+  while (Date.now() < deadline) {
+    const polled = await transport.poll({ receiver, limit: 5 });
+    const envelope = (polled.items || []).find((item) => item.request_id === request.request_id);
+    if (envelope) {
+      const resultPackage = extractResultPackageFromEnvelope(envelope);
+      await transport.ack(envelope.message_id, { receiver });
+      const verification = verifyReviewResult(request, resultPackage);
+      reviewTest.status = "completed";
+      reviewTest.verdict = verification.ok ? "pass" : "fail";
+      reviewTest.failure_code = verification.code;
+      reviewTest.result_summary = verification.summary;
+      reviewTest.result_package = resultPackage;
+      reviewTest.finished_at = nowIso();
+      await persistPlatformState(onStateChanged, state);
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+
+  reviewTest.status = "completed";
+  reviewTest.verdict = "fail";
+  reviewTest.failure_code = "EXEC_TIMEOUT";
+  reviewTest.result_summary = "review test timed out waiting for result";
+  reviewTest.finished_at = nowIso();
+  await persistPlatformState(onStateChanged, state);
 }
 
 function matchesQuery(value, query) {
@@ -684,7 +1263,13 @@ function paginateItems(items, { limit, offset }) {
 
 function issueTaskToken(state, auth, body) {
   const catalogItem = state.catalog.get(body.subagent_id);
-  if (!catalogItem || catalogItem.seller_id !== body.seller_id || catalogItem.status !== "enabled") {
+  const seller = state.sellers.get(body.seller_id);
+  if (
+    !catalogItem ||
+    !seller ||
+    catalogItem.seller_id !== body.seller_id ||
+    resolveCatalogVisibility(state, catalogItem) !== "public"
+  ) {
     return { error: { code: "CATALOG_SUBAGENT_NOT_FOUND", message: "subagent not found or not enabled", retryable: false } };
   }
 
@@ -699,57 +1284,82 @@ function issueTaskToken(state, auth, body) {
     return { error: { code: "REQUEST_BINDING_MISMATCH", message: "seller_id or subagent_id does not match existing request", retryable: false }, statusCode: 409 };
   }
 
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const tokenTtlSeconds = Number(process.env.TOKEN_TTL_SECONDS || state.tokenTtlSeconds);
-  const claims = {
-    iss: "croc-platform-api",
-    sub: auth.user_id,
-    aud: body.seller_id,
-    jti: randomId("tok"),
-    iat: issuedAt,
-    exp: issuedAt + tokenTtlSeconds,
-    buyer_id: auth.user_id,
-    request_id: body.request_id,
-    seller_id: body.seller_id,
-    subagent_id: body.subagent_id
-  };
-  const token = signToken(state.tokenSecret, claims);
+  const issued = createTaskClaims(state, {
+    buyerId: auth.user_id,
+    requestId: body.request_id,
+    sellerId: body.seller_id,
+    subagentId: body.subagent_id
+  });
   request.buyer_id = auth.user_id;
   request.seller_id = body.seller_id;
   request.subagent_id = body.subagent_id;
+  request.request_kind ||= "remote_request";
+  request.request_visibility ||= "public";
   appendRequestEvent(request, "TASK_TOKEN_ISSUED", { actor_type: "buyer" });
 
-  return { task_token: token, claims };
+  return issued;
 }
 
-function registerSellerIdentity(state, body, auth = null) {
+function submitCatalogSubagent(state, body, auth = null, { allowUnauthenticatedCreate = false } = {}) {
   if (!body.seller_id || !body.subagent_id || !body.display_name || !body.seller_public_key_pem) {
-    return { error: { code: "CONTRACT_INVALID_SELLER_REGISTER_BODY", message: "seller_id, subagent_id, display_name, and seller_public_key_pem are required", retryable: false }, statusCode: 400 };
-  }
-  if (state.catalog.has(body.subagent_id)) {
-    return { error: { code: "SUBAGENT_ID_ALREADY_EXISTS", message: "a subagent with this id is already registered", retryable: false }, statusCode: 409 };
+    return {
+      error: {
+        code: "CONTRACT_INVALID_SELLER_REGISTER_BODY",
+        message: "seller_id, subagent_id, display_name, and seller_public_key_pem are required",
+        retryable: false
+      },
+      statusCode: 400
+    };
   }
 
-  const existingSeller = state.sellers.get(body.seller_id);
-  const sellerApiKey = existingSeller?.api_key || `sk_seller_${crypto.randomBytes(12).toString("hex")}`;
-  const ownerUserId = existingSeller?.owner_user_id || auth?.user_id || body.owner_user_id || randomId("user");
-  const templateRef = body.template_ref || `${body.subagent_id}@v1`;
-  const taskTypes = normalizeStringList(body.task_types);
-  const capabilities = normalizeStringList(body.capabilities);
-  const tags = normalizeStringList(body.tags);
-  const heartbeatAt = nowIso();
+  const existingSeller = state.sellers.get(body.seller_id) || null;
+  const existingItem = state.catalog.get(body.subagent_id) || null;
+  if (existingItem && existingItem.seller_id !== body.seller_id) {
+    return {
+      error: { code: "SUBAGENT_ID_ALREADY_EXISTS", message: "a subagent with this id is already registered", retryable: false },
+      statusCode: 409
+    };
+  }
+
+  if (existingSeller && !existingItem && (existingSeller.subagent_ids || []).length >= (state.limits?.subagentsPerSeller || DEFAULT_SUBAGENT_QUOTA_PER_SELLER)) {
+    return {
+      error: {
+        code: "SUBAGENT_QUOTA_EXCEEDED",
+        message: `seller has reached the configured subagent quota of ${state.limits?.subagentsPerSeller || DEFAULT_SUBAGENT_QUOTA_PER_SELLER}`,
+        retryable: false
+      },
+      statusCode: 429
+    };
+  }
+
+  if (!existingSeller && !auth && !allowUnauthenticatedCreate) {
+    return {
+      error: { code: "AUTH_UNAUTHORIZED", message: "buyer or seller authentication is required for onboarding", retryable: false },
+      statusCode: 401
+    };
+  }
 
   if (existingSeller) {
     if (!auth) {
-      return { error: { code: "AUTH_UNAUTHORIZED", message: "authentication required to add subagent to existing seller", retryable: false }, statusCode: 401 };
+      return {
+        error: { code: "AUTH_UNAUTHORIZED", message: "authentication required to manage an existing seller", retryable: false },
+        statusCode: 401
+      };
     }
-    if (auth?.type === "buyer" && existingSeller.owner_user_id !== auth.user_id) {
-      return { error: { code: "AUTH_RESOURCE_FORBIDDEN", message: "caller does not own this seller identity", retryable: false }, statusCode: 403 };
-    }
-    if (auth?.type === "seller" && auth.seller_id !== existingSeller.seller_id) {
-      return { error: { code: "AUTH_RESOURCE_FORBIDDEN", message: "caller does not own this seller identity", retryable: false }, statusCode: 403 };
+    if (!canManageSeller(auth, existingSeller)) {
+      return {
+        error: { code: "AUTH_RESOURCE_FORBIDDEN", message: "caller does not own this seller identity", retryable: false },
+        statusCode: 403
+      };
     }
   }
+
+  const submissionPayload = buildSubmissionPayload(body);
+  const ownerUserId = existingSeller?.owner_user_id || auth?.user_id || body.owner_user_id || randomId("user");
+  const sellerApiKey = existingSeller?.api_key || `sk_seller_${crypto.randomBytes(12).toString("hex")}`;
+  const heartbeatAt = nowIso();
+  const templateRef = submissionPayload.template_ref;
+  const submissionVersion = determineSubmissionVersion(state, body.subagent_id);
 
   const seller = existingSeller || {
     seller_id: body.seller_id,
@@ -757,29 +1367,63 @@ function registerSellerIdentity(state, body, auth = null) {
     api_key: sellerApiKey,
     scopes: ["seller"],
     subagent_ids: [],
+    status: "disabled",
+    review_status: "pending",
+    reviewed_at: null,
+    reviewed_by: null,
+    review_reason: null,
+    seller_public_key_pem: body.seller_public_key_pem,
+    seller_public_keys_pem: existingSeller?.seller_public_keys_pem || [body.seller_public_key_pem],
     last_heartbeat_at: heartbeatAt,
     availability_status: "healthy",
     contact_email: body.contact_email || state.users.get(ownerUserId)?.contact_email || `${body.seller_id}@test.local`,
     support_email: body.support_email || `support+${body.seller_id}@test.local`
   };
+
+  const sellerChanged =
+    !existingSeller ||
+    seller.contact_email !== (body.contact_email || seller.contact_email) ||
+    seller.support_email !== (body.support_email || seller.support_email) ||
+    seller.seller_public_key_pem !== body.seller_public_key_pem;
+
+  seller.contact_email = body.contact_email || seller.contact_email;
+  seller.support_email = body.support_email || seller.support_email;
+  seller.seller_public_key_pem = body.seller_public_key_pem;
+  seller.seller_public_keys_pem = Array.from(new Set([body.seller_public_key_pem, ...(seller.seller_public_keys_pem || [])]));
   seller.subagent_ids = Array.from(new Set([...(seller.subagent_ids || []), body.subagent_id]));
   seller.last_heartbeat_at = seller.last_heartbeat_at || heartbeatAt;
   seller.availability_status ||= "healthy";
+  if (!existingSeller || sellerChanged) {
+    seller.review_status = "pending";
+    seller.status = "disabled";
+    seller.reviewed_at = null;
+    seller.reviewed_by = null;
+    seller.review_reason = null;
+  }
+
   const catalogItem = {
     seller_id: body.seller_id,
     subagent_id: body.subagent_id,
     display_name: body.display_name,
+    description: body.description || existingItem?.description || null,
     status: "disabled",
-    availability_status: "healthy",
-    last_heartbeat_at: heartbeatAt,
+    review_status: "pending",
+    submission_version: submissionVersion,
+    submitted_at: heartbeatAt,
+    reviewed_at: null,
+    reviewed_by: null,
+    review_reason: null,
+    availability_status: existingItem?.availability_status || "healthy",
+    last_heartbeat_at: existingItem?.last_heartbeat_at || heartbeatAt,
     template_ref: templateRef,
-    task_types: taskTypes,
-    capabilities,
-    tags,
-    input_schema: body.input_schema || null,
-    output_schema: body.output_schema || null,
-    seller_public_key_pem: body.seller_public_key_pem,
-    task_delivery_address: body.task_delivery_address || `local://relay/${body.seller_id}/${body.subagent_id}`
+    task_types: submissionPayload.task_types,
+    capabilities: submissionPayload.capabilities,
+    tags: submissionPayload.tags,
+    input_schema: submissionPayload.input_schema,
+    output_schema: submissionPayload.output_schema,
+    seller_public_key_pem: submissionPayload.seller_public_key_pem,
+    seller_public_keys_pem: seller.seller_public_keys_pem,
+    task_delivery_address: submissionPayload.task_delivery_address
   };
 
   state.sellers.set(seller.seller_id, seller);
@@ -798,12 +1442,23 @@ function registerSellerIdentity(state, body, auth = null) {
       outputSchema: catalogItem.output_schema
     })
   );
+  state.submissions.set(catalogItem.subagent_id, {
+    seller_id: seller.seller_id,
+    subagent_id: catalogItem.subagent_id,
+    owner_user_id: ownerUserId,
+    submitted_at: heartbeatAt,
+    submitted_by: auth?.user_id || auth?.seller_id || "system",
+    review_reason: body.review_reason || body.reason || null,
+    submission_version: submissionVersion,
+    submitted_payload: submissionPayload,
+    latest_review_test_request_id: existingItem ? state.submissions.get(catalogItem.subagent_id)?.latest_review_test_request_id || null : null
+  });
 
   if (auth?.user_id) {
     addUserRole(state, auth.user_id, "seller");
   }
 
-  if (!existingSeller) {
+  if (!existingSeller || sellerChanged) {
     appendReviewEvent(
       state,
       auth,
@@ -812,6 +1467,7 @@ function registerSellerIdentity(state, body, auth = null) {
       {
         seller_id: seller.seller_id,
         subagent_id: catalogItem.subagent_id,
+        submission_version: submissionVersion,
         reason: body.review_reason || body.reason || null
       }
     );
@@ -824,6 +1480,7 @@ function registerSellerIdentity(state, body, auth = null) {
     {
       seller_id: seller.seller_id,
       subagent_id: catalogItem.subagent_id,
+      submission_version: submissionVersion,
       reason: body.review_reason || body.reason || null
     }
   );
@@ -831,16 +1488,29 @@ function registerSellerIdentity(state, body, auth = null) {
   return {
     seller_id: seller.seller_id,
     subagent_id: catalogItem.subagent_id,
+    seller_api_key: sellerApiKey,
     api_key: sellerApiKey,
     owner_user_id: ownerUserId,
     task_delivery_address: catalogItem.task_delivery_address,
     seller_public_key_pem: catalogItem.seller_public_key_pem,
     status: catalogItem.status,
-    review_status: "pending",
-    task_types: taskTypes,
-    capabilities,
-    tags
+    seller_status: seller.status,
+    subagent_status: catalogItem.status,
+    seller_review_status: seller.review_status,
+    subagent_review_status: catalogItem.review_status,
+    review_status: catalogItem.review_status,
+    catalog_visibility: resolveCatalogVisibility(state, catalogItem),
+    submission_version: submissionVersion,
+    task_types: catalogItem.task_types,
+    capabilities: catalogItem.capabilities,
+    tags: catalogItem.tags
   };
+}
+
+function registerSellerIdentity(state, body, auth = null) {
+  return submitCatalogSubagent(state, body, auth, {
+    allowUnauthenticatedCreate: true
+  });
 }
 
 export function createPlatformServer({
@@ -848,6 +1518,66 @@ export function createPlatformServer({
   serviceName = "platform-api",
   onStateChanged = null
 } = {}) {
+  const rateLimiter = createRateLimiter();
+  const metricsBearerToken = process.env.PROMETHEUS_METRICS_BEARER_TOKEN || null;
+
+  function enforceRateLimit(req, res, routeKey, auth = null) {
+    const attempt = rateLimiter.allow(routeKey, requestIdentityForRateLimit(req, auth));
+    if (attempt.ok) {
+      return true;
+    }
+    res.setHeader("retry-after", String(Math.max(1, Math.ceil((attempt.retryAfterMs || 1000) / 1000))));
+    sendError(res, 429, "RATE_LIMITED", "request rate limit exceeded", {
+      retryable: true
+    });
+    return false;
+  }
+
+  function requireMetricsAccess(req, res) {
+    if (!metricsBearerToken) {
+      return true;
+    }
+    const auth = req.headers.authorization || "";
+    const match = auth.match(/^Bearer\s+(.+)$/i);
+    if (match?.[1] === metricsBearerToken) {
+      return true;
+    }
+    sendError(res, 401, "AUTH_UNAUTHORIZED", "metrics bearer token is missing or invalid");
+    return false;
+  }
+
+  function renderPrometheusMetrics() {
+    const lines = [
+      "# HELP rsp_platform_requests_total Total requests tracked by the platform state.",
+      "# TYPE rsp_platform_requests_total gauge",
+      `rsp_platform_requests_total ${state.requests.size}`,
+      "# HELP rsp_platform_catalog_public_subagents Total public subagents visible in catalog.",
+      "# TYPE rsp_platform_catalog_public_subagents gauge",
+      `rsp_platform_catalog_public_subagents ${Array.from(state.catalog.values()).filter((item) => resolveCatalogVisibility(state, item) === "public").length}`,
+      "# HELP rsp_platform_metrics_events_total Total metric events retained by the platform.",
+      "# TYPE rsp_platform_metrics_events_total gauge",
+      `rsp_platform_metrics_events_total ${state.metricsEvents.length}`
+    ];
+
+    const byType = state.metricsEvents.reduce((acc, event) => {
+      acc[event.event_type] = (acc[event.event_type] || 0) + 1;
+      return acc;
+    }, {});
+    for (const [eventType, count] of Object.entries(byType).sort(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`rsp_platform_metric_event_type_total{event_type="${eventType.replace(/"/g, '\\"')}"} ${count}`);
+    }
+
+    const reviewTestCounts = Array.from(state.reviewTests.values()).reduce((acc, item) => {
+      acc[item.status || "unknown"] = (acc[item.status || "unknown"] || 0) + 1;
+      return acc;
+    }, {});
+    for (const [status, count] of Object.entries(reviewTestCounts).sort(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`rsp_platform_review_tests_total{status="${status.replace(/"/g, '\\"')}"} ${count}`);
+    }
+
+    return `${lines.join("\n")}\n`;
+  }
+
   return http.createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", "http://localhost");
@@ -869,6 +1599,17 @@ export function createPlatformServer({
         return;
       }
 
+      if (method === "GET" && pathname === "/metrics") {
+        if (!requireMetricsAccess(req, res)) {
+          return;
+        }
+        res.writeHead(200, {
+          "content-type": "text/plain; version=0.0.4; charset=utf-8"
+        });
+        res.end(renderPrometheusMetrics());
+        return;
+      }
+
       if (method === "GET" && pathname === "/readyz") {
         sendJson(res, 200, { ready: true, service: serviceName });
         return;
@@ -880,6 +1621,9 @@ export function createPlatformServer({
       }
 
       if (method === "POST" && pathname === "/v1/users/register") {
+        if (!enforceRateLimit(req, res, "registerUserMax")) {
+          return;
+        }
         const body = await parseJsonBody(req);
         const user = registerBuyerUser(state, body);
         if (user.error) {
@@ -899,7 +1643,34 @@ export function createPlatformServer({
           sendError(res, 403, "AUTH_SCOPE_FORBIDDEN", "only buyer or seller callers may register");
           return;
         }
+        if (!enforceRateLimit(req, res, "registerSellerMax", auth)) {
+          return;
+        }
         const registered = registerSellerIdentity(state, body, auth);
+        if (registered.error) {
+          sendJson(res, registered.statusCode || 400, { error: registered.error });
+          return;
+        }
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 201, registered);
+        return;
+      }
+
+      if (method === "POST" && pathname === "/v1/catalog/subagents") {
+        const auth = requireAuth(req, res, state);
+        if (!auth) {
+          return;
+        }
+        if (auth.type !== "buyer" && auth.type !== "seller") {
+          sendError(res, 403, "AUTH_SCOPE_FORBIDDEN", "only buyer or seller callers may submit onboarding");
+          return;
+        }
+        if (!enforceRateLimit(req, res, "catalogSubmitMax", auth)) {
+          return;
+        }
+
+        const body = await parseJsonBody(req);
+        const registered = submitCatalogSubagent(state, body, auth);
         if (registered.error) {
           sendJson(res, registered.statusCode || 400, { error: registered.error });
           return;
@@ -920,14 +1691,35 @@ export function createPlatformServer({
             ...item,
             availability_status: resolveCatalogAvailability(item)
           }))
+          .filter((item) => resolveCatalogVisibility(state, item) === "public")
           .filter((item) => !statusFilter || item.status === statusFilter)
           .filter((item) => !availabilityFilter || item.availability_status === availabilityFilter)
           .filter((item) => !taskTypeFilter || (item.task_types || []).includes(taskTypeFilter))
           .filter((item) => !capabilityFilter || (item.capabilities || []).includes(capabilityFilter))
           .filter((item) => !tagFilter || (item.tags || []).includes(tagFilter))
-          .map(sanitizeCatalogItem);
+          .map((item) => sanitizeCatalogItemForResponse(state, item));
 
         sendJson(res, 200, { items });
+        return;
+      }
+
+      const catalogDetailMatch = pathname.match(/^\/v1\/catalog\/subagents\/([^/]+)$/);
+      if (method === "GET" && catalogDetailMatch) {
+        const item = state.catalog.get(catalogDetailMatch[1]);
+        if (!item) {
+          sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
+          return;
+        }
+        const auth = resolveAuth(req, state);
+        if (!canViewCatalogItemDetail(state, auth, item)) {
+          sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
+          return;
+        }
+        if (resolveCatalogVisibility(state, item) === "public" && !isOperatorAuth(auth, state) && !canManageSeller(auth, state.sellers.get(item.seller_id))) {
+          sendJson(res, 200, sanitizeCatalogItemForResponse(state, item));
+          return;
+        }
+        sendJson(res, 200, buildCatalogDetail(state, item));
         return;
       }
 
@@ -937,6 +1729,11 @@ export function createPlatformServer({
         const templateRef = url.searchParams.get("template_ref");
         const catalogItem = state.catalog.get(subagentId);
         if (!catalogItem) {
+          sendError(res, 404, "TEMPLATE_NOT_FOUND", "subagent or template not found");
+          return;
+        }
+        const auth = resolveAuth(req, state);
+        if (!canViewCatalogItemDetail(state, auth, catalogItem)) {
           sendError(res, 404, "TEMPLATE_NOT_FOUND", "subagent or template not found");
           return;
         }
@@ -1033,7 +1830,11 @@ export function createPlatformServer({
         }
 
         const catalogItem = state.catalog.get(body.subagent_id);
-        if (!catalogItem || catalogItem.seller_id !== body.seller_id || catalogItem.status !== "enabled") {
+        if (
+          !catalogItem ||
+          catalogItem.seller_id !== body.seller_id ||
+          resolveCatalogVisibility(state, catalogItem) !== "public"
+        ) {
           sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found or not enabled");
           return;
         }
@@ -1075,26 +1876,9 @@ export function createPlatformServer({
         request.buyer_id = auth.user_id;
         request.seller_id = body.seller_id;
         request.subagent_id = body.subagent_id;
-        request.expected_signer_public_key_pem = catalogItem.seller_public_key_pem;
-        request.delivery_meta = {
-          request_id: requestId,
-          seller_id: body.seller_id,
-          subagent_id: body.subagent_id,
-          task_delivery: {
-            kind: catalogItem.task_delivery_address.startsWith("local://") ? "local" : "email",
-            address: catalogItem.task_delivery_address,
-            thread_hint: `req:${requestId}`
-          },
-          result_delivery: {
-            kind: normalizedResultDelivery.kind,
-            address: normalizedResultDelivery.address,
-            thread_hint: `req:${requestId}`
-          },
-          verification: {
-            display_code: request.delivery_meta?.verification?.display_code || createDisplayCode()
-          },
-          seller_public_key_pem: catalogItem.seller_public_key_pem
-        };
+        request.request_kind ||= "remote_request";
+        request.request_visibility ||= "public";
+        createDeliveryMeta(state, request, catalogItem, normalizedResultDelivery);
         appendRequestEvent(request, "DELIVERY_META_ISSUED", { actor_type: "buyer" });
         await persistPlatformState(onStateChanged, state);
 
@@ -1260,6 +2044,61 @@ export function createPlatformServer({
         return;
       }
 
+      if (method === "POST" && pathname === "/v1/requests/events/batch") {
+        const auth = requireAuth(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const body = await parseJsonBody(req);
+        const requestIds = Array.isArray(body.request_ids) ? body.request_ids.map((item) => String(item)).filter(Boolean) : [];
+        if (requestIds.length === 0) {
+          sendError(res, 400, "CONTRACT_INVALID_BATCH_REQUEST", "request_ids must contain at least one id");
+          return;
+        }
+        if (requestIds.length > 100) {
+          sendError(res, 400, "CONTRACT_INVALID_BATCH_REQUEST", "request_ids cannot exceed 100 items");
+          return;
+        }
+
+        const items = [];
+        for (const requestId of requestIds) {
+          const request = state.requests.get(requestId);
+          if (!request) {
+            items.push({
+              request_id: requestId,
+              found: false
+            });
+            continue;
+          }
+          if (auth.type === "buyer" && request.buyer_id !== auth.user_id) {
+            items.push({
+              request_id: requestId,
+              found: false
+            });
+            continue;
+          }
+          if (
+            auth.type === "seller" &&
+            (request.seller_id !== auth.seller_id || (request.subagent_id && !auth.subagent_ids.includes(request.subagent_id)))
+          ) {
+            items.push({
+              request_id: requestId,
+              found: false
+            });
+            continue;
+          }
+          items.push({
+            request_id: request.request_id,
+            found: true,
+            events: request.events,
+            items: request.events
+          });
+        }
+
+        sendJson(res, 200, { items });
+        return;
+      }
+
       const heartbeatMatch = pathname.match(/^\/v1\/sellers\/([^/]+)\/heartbeat$/);
       if (method === "POST" && heartbeatMatch) {
         const sellerId = heartbeatMatch[1];
@@ -1317,7 +2156,7 @@ export function createPlatformServer({
           request_id: body.request_id || null,
           recorded_at: nowIso()
         };
-        state.metricsEvents.push(event);
+        pushCapped(state.metricsEvents, event, telemetryHistoryLimit(state));
         await persistPlatformState(onStateChanged, state);
         sendJson(res, 202, { accepted: true, event });
         return;
@@ -1347,17 +2186,20 @@ export function createPlatformServer({
         const { limit, offset } = parsePagination(url);
         const q = url.searchParams.get("q");
         const status = url.searchParams.get("status");
+        const reviewStatus = url.searchParams.get("review_status");
         const availabilityStatus = url.searchParams.get("availability_status");
         const ownerUserId = url.searchParams.get("owner_user_id");
 
         const items = Array.from(state.sellers.values())
           .map((seller) =>
             buildSellerAdminSummary(
+              state,
               seller,
               Array.from(state.catalog.values()).filter((item) => item.seller_id === seller.seller_id)
             )
           )
           .filter((item) => !status || item.status === status)
+          .filter((item) => !reviewStatus || item.review_status === reviewStatus)
           .filter((item) => !availabilityStatus || item.availability_status === availabilityStatus)
           .filter((item) => !ownerUserId || item.owner_user_id === ownerUserId)
           .filter((item) => matchesQuery(item, q));
@@ -1373,17 +2215,21 @@ export function createPlatformServer({
         const { limit, offset } = parsePagination(url);
         const q = url.searchParams.get("q");
         const status = url.searchParams.get("status");
+        const reviewStatus = url.searchParams.get("review_status");
         const availabilityStatus = url.searchParams.get("availability_status");
         const sellerId = url.searchParams.get("seller_id");
         const capability = url.searchParams.get("capability");
         const tag = url.searchParams.get("tag");
 
         const items = Array.from(state.catalog.values())
-          .map((item) => ({
-            ...item,
-            availability_status: resolveCatalogAvailability(item)
-          }))
+          .map((item) =>
+            buildCatalogAdminSummary(state, {
+              ...item,
+              availability_status: resolveCatalogAvailability(item)
+            })
+          )
           .filter((item) => !status || item.status === status)
+          .filter((item) => !reviewStatus || item.review_status === reviewStatus)
           .filter((item) => !availabilityStatus || item.availability_status === availabilityStatus)
           .filter((item) => !sellerId || item.seller_id === sellerId)
           .filter((item) => !capability || (item.capabilities || []).includes(capability))
@@ -1438,6 +2284,47 @@ export function createPlatformServer({
         return;
       }
 
+      if (method === "GET" && pathname === "/v1/admin/review-tests") {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const { limit, offset } = parsePagination(url);
+        const q = url.searchParams.get("q");
+        const sellerId = url.searchParams.get("seller_id");
+        const subagentId = url.searchParams.get("subagent_id");
+        const status = url.searchParams.get("status");
+        const verdict = url.searchParams.get("verdict");
+
+        const items = Array.from(state.reviewTests.values())
+          .map(summarizeReviewTest)
+          .filter((item) => !sellerId || item?.seller_id === sellerId)
+          .filter((item) => !subagentId || item?.subagent_id === subagentId)
+          .filter((item) => !status || item?.status === status)
+          .filter((item) => !verdict || item?.verdict === verdict)
+          .filter((item) => matchesQuery(item, q));
+        sendJson(res, 200, paginateItems(items, { limit, offset }));
+        return;
+      }
+
+      const reviewTestDetailMatch = pathname.match(/^\/v1\/admin\/review-tests\/([^/]+)$/);
+      if (method === "GET" && reviewTestDetailMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const reviewTest = state.reviewTests.get(reviewTestDetailMatch[1]);
+        if (!reviewTest) {
+          sendError(res, 404, "REQUEST_NOT_FOUND", "review test not found");
+          return;
+        }
+        sendJson(res, 200, {
+          ...reviewTest,
+          request: state.requests.get(reviewTest.request_id) || null
+        });
+        return;
+      }
+
       const adminRoleGrantMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/roles$/);
       if (method === "POST" && adminRoleGrantMatch) {
         const auth = requireOperator(req, res, state);
@@ -1463,6 +2350,90 @@ export function createPlatformServer({
         return;
       }
 
+      const buyerKeyRotateMatch = pathname.match(/^\/v1\/admin\/users\/([^/]+)\/api-keys\/rotate$/);
+      if (method === "POST" && buyerKeyRotateMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const rotated = rotateBuyerApiKey(state, buyerKeyRotateMatch[1]);
+        if (!rotated) {
+          sendError(res, 404, "USER_NOT_FOUND", "no user found with this id");
+          return;
+        }
+        appendAuditEvent(state, auth, "user.api_key.rotated", { type: "user", id: rotated.user_id });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, rotated);
+        return;
+      }
+
+      const sellerKeyRotateMatch = pathname.match(/^\/v1\/admin\/sellers\/([^/]+)\/api-keys\/rotate$/);
+      if (method === "POST" && sellerKeyRotateMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const rotated = rotateSellerApiKey(state, sellerKeyRotateMatch[1]);
+        if (!rotated) {
+          sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
+          return;
+        }
+        appendAuditEvent(state, auth, "seller.api_key.rotated", { type: "seller", id: rotated.seller_id });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, rotated);
+        return;
+      }
+
+      const sellerSigningRotateMatch = pathname.match(/^\/v1\/admin\/sellers\/([^/]+)\/signing-keys\/rotate$/);
+      if (method === "POST" && sellerSigningRotateMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const body = await parseJsonBody(req);
+        const rotated = rotateSellerSigningKey(state, sellerSigningRotateMatch[1], body);
+        if (!rotated) {
+          sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
+          return;
+        }
+        if (rotated.error) {
+          sendJson(res, rotated.statusCode || 400, { error: rotated.error });
+          return;
+        }
+        appendAuditEvent(state, auth, "seller.signing_key.rotated", { type: "seller", id: rotated.seller_id }, {
+          rotation_window_until: rotated.rotation_window_until
+        });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, rotated);
+        return;
+      }
+
+      if (method === "POST" && pathname === "/v1/admin/api-keys/revoke") {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const body = await parseJsonBody(req);
+        if (!body.api_key) {
+          sendError(res, 400, "CONTRACT_INVALID_API_KEY_REVOKE", "api_key is required");
+          return;
+        }
+        const revoked = revokeApiKey(state, body.api_key);
+        if (!revoked) {
+          sendError(res, 404, "AUTH_KEY_NOT_FOUND", "api key was not found");
+          return;
+        }
+        appendAuditEvent(state, auth, "api_key.revoked", { type: revoked.type || "api_key", id: revoked.user_id || revoked.seller_id || "unknown" });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, {
+          revoked: true,
+          type: revoked.type,
+          user_id: revoked.user_id || null,
+          seller_id: revoked.seller_id || null
+        });
+        return;
+      }
+
       if (method === "GET" && pathname === "/v1/admin/audit-events") {
         const auth = requireOperator(req, res, state);
         if (!auth) {
@@ -1485,6 +2456,134 @@ export function createPlatformServer({
         return;
       }
 
+      const adminReviewTestCreateMatch = pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/review-tests$/);
+      if (method === "POST" && adminReviewTestCreateMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const body = await parseJsonBody(req);
+        const item = state.catalog.get(adminReviewTestCreateMatch[1]);
+        if (!item) {
+          sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
+          return;
+        }
+        if (!item.task_delivery_address?.startsWith("local://")) {
+          sendError(
+            res,
+            409,
+            "PLATFORM_REVIEW_TEST_UNSUPPORTED",
+            "review test automation currently supports only local or relay-backed task delivery"
+          );
+          return;
+        }
+        const transport = createReviewTransport();
+        if (!transport) {
+          sendError(
+            res,
+            409,
+            "PLATFORM_REVIEW_TRANSPORT_NOT_CONFIGURED",
+            "review transport base URL is not configured on the platform"
+          );
+          return;
+        }
+
+        const requestId = body.request_id || `req_review_${crypto.randomUUID().replace(/-/g, "")}`;
+        const taskInput = body.task_input || {};
+        const constraints = body.constraints || null;
+        const request = getOrCreateRequest(state, requestId);
+        request.buyer_id = REVIEW_TEST_BUYER_ID;
+        request.seller_id = item.seller_id;
+        request.subagent_id = item.subagent_id;
+        request.request_kind = "review_test";
+        request.request_visibility = "hidden";
+
+        const issued = createTaskClaims(state, {
+          buyerId: REVIEW_TEST_BUYER_ID,
+          requestId,
+          sellerId: item.seller_id,
+          subagentId: item.subagent_id,
+          requestKind: "review_test"
+        });
+        const resultDelivery = {
+          kind: "local",
+          address: buildReviewResultAddress(requestId)
+        };
+        createDeliveryMeta(state, request, item, resultDelivery);
+        appendRequestEvent(request, "TASK_TOKEN_ISSUED", { actor_type: "system", request_kind: "review_test" });
+        appendRequestEvent(request, "DELIVERY_META_ISSUED", { actor_type: "system", request_kind: "review_test" });
+
+        const reviewTest = {
+          request_id: requestId,
+          seller_id: item.seller_id,
+          subagent_id: item.subagent_id,
+          status: "running",
+          verdict: null,
+          failure_code: null,
+          result_summary: null,
+          result_package: null,
+          task_input: cloneValue(taskInput),
+          constraints: cloneValue(constraints),
+          expected_checks: cloneValue(body.expected_checks || null),
+          timeout_ms: Number(body.timeout_ms || 0) || null,
+          started_at: nowIso(),
+          finished_at: null,
+          task_token: issued.task_token
+        };
+        state.reviewTests.set(requestId, reviewTest);
+
+        const submission = state.submissions.get(item.subagent_id);
+        if (submission) {
+          submission.latest_review_test_request_id = requestId;
+        }
+
+        appendAuditEvent(state, auth, "review_test.started", { type: "subagent", id: item.subagent_id }, { request_id: requestId });
+        await persistPlatformState(onStateChanged, state);
+
+        void runReviewTestHarness(state, reviewTest, request, transport, onStateChanged)
+          .then(async () => {
+            appendAuditEvent(
+              state,
+              auth,
+              "review_test.completed",
+              { type: "subagent", id: item.subagent_id },
+              {
+                request_id: requestId,
+                verdict: reviewTest.verdict,
+                failure_code: reviewTest.failure_code || null
+              }
+            );
+            await persistPlatformState(onStateChanged, state);
+          })
+          .catch(async (error) => {
+            reviewTest.status = "completed";
+            reviewTest.verdict = "fail";
+            reviewTest.failure_code = "TRANSPORT_CONNECTION_FAILED";
+            reviewTest.result_summary = error instanceof Error ? error.message : "review test failed";
+            reviewTest.finished_at = nowIso();
+            appendAuditEvent(
+              state,
+              auth,
+              "review_test.completed",
+              { type: "subagent", id: item.subagent_id },
+              {
+                request_id: requestId,
+                verdict: reviewTest.verdict,
+                failure_code: reviewTest.failure_code
+              }
+            );
+            await persistPlatformState(onStateChanged, state);
+          });
+
+        sendJson(res, 202, {
+          request_id: requestId,
+          seller_id: item.seller_id,
+          subagent_id: item.subagent_id,
+          status: reviewTest.status
+        });
+        return;
+      }
+
       const adminSellerDisableMatch = pathname.match(/^\/v1\/admin\/sellers\/([^/]+)\/disable$/);
       if (method === "POST" && adminSellerDisableMatch) {
         const auth = requireOperator(req, res, state);
@@ -1493,14 +2592,20 @@ export function createPlatformServer({
         }
         const body = await parseJsonBody(req);
 
-        const seller = setSellerCatalogStatus(state, adminSellerDisableMatch[1], "disabled");
+        const seller = state.sellers.get(adminSellerDisableMatch[1]);
         if (!seller) {
           sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
           return;
         }
+        seller.status = "disabled";
         appendAuditEvent(state, auth, "seller.disabled", { type: "seller", id: seller.seller_id }, { reason: body.reason || null });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { seller_id: seller.seller_id, status: "disabled" });
+        sendJson(res, 200, {
+          seller_id: seller.seller_id,
+          status: seller.status,
+          review_status: seller.review_status,
+          catalog_visibility: "hidden"
+        });
         return;
       }
 
@@ -1512,15 +2617,24 @@ export function createPlatformServer({
         }
         const body = await parseJsonBody(req);
 
-        const seller = setSellerCatalogStatus(state, adminSellerApproveMatch[1], "enabled");
+        const seller = state.sellers.get(adminSellerApproveMatch[1]);
         if (!seller) {
           sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
           return;
         }
+        seller.review_status = "approved";
+        seller.status = "enabled";
+        seller.reviewed_at = nowIso();
+        seller.reviewed_by = describeActor(auth).actor_id;
+        seller.review_reason = body.reason || null;
         appendAuditEvent(state, auth, "seller.approved", { type: "seller", id: seller.seller_id }, { reason: body.reason || null });
-        appendReviewEvent(state, auth, "approved", { type: "seller", id: seller.seller_id }, { reason: body.reason || null });
+        appendReviewEvent(state, auth, "approved", { type: "seller", id: seller.seller_id }, { reason: body.reason || null, seller_id: seller.seller_id });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { seller_id: seller.seller_id, status: "enabled" });
+        sendJson(res, 200, {
+          seller_id: seller.seller_id,
+          status: seller.status,
+          review_status: seller.review_status
+        });
         return;
       }
 
@@ -1532,15 +2646,51 @@ export function createPlatformServer({
         }
         const body = await parseJsonBody(req);
 
-        const seller = setSellerCatalogStatus(state, adminSellerRejectMatch[1], "disabled");
+        const seller = state.sellers.get(adminSellerRejectMatch[1]);
         if (!seller) {
           sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
           return;
         }
+        seller.review_status = "rejected";
+        seller.status = "disabled";
+        seller.reviewed_at = nowIso();
+        seller.reviewed_by = describeActor(auth).actor_id;
+        seller.review_reason = body.reason || null;
         appendAuditEvent(state, auth, "seller.rejected", { type: "seller", id: seller.seller_id }, { reason: body.reason || null });
-        appendReviewEvent(state, auth, "rejected", { type: "seller", id: seller.seller_id }, { reason: body.reason || null });
+        appendReviewEvent(state, auth, "rejected", { type: "seller", id: seller.seller_id }, { reason: body.reason || null, seller_id: seller.seller_id });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { seller_id: seller.seller_id, status: "disabled", review_status: "rejected" });
+        sendJson(res, 200, {
+          seller_id: seller.seller_id,
+          status: seller.status,
+          review_status: seller.review_status,
+          catalog_visibility: "hidden"
+        });
+        return;
+      }
+
+      const adminSellerEnableMatch = pathname.match(/^\/v1\/admin\/sellers\/([^/]+)\/enable$/);
+      if (method === "POST" && adminSellerEnableMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const seller = state.sellers.get(adminSellerEnableMatch[1]);
+        if (!seller) {
+          sendError(res, 404, "SELLER_NOT_FOUND", "no seller found with this id");
+          return;
+        }
+        if (seller.review_status !== "approved") {
+          sendError(res, 409, "SELLER_NOT_APPROVED", "seller must be approved before it can be enabled");
+          return;
+        }
+        seller.status = "enabled";
+        appendAuditEvent(state, auth, "seller.enabled", { type: "seller", id: seller.seller_id });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, {
+          seller_id: seller.seller_id,
+          status: seller.status,
+          review_status: seller.review_status
+        });
         return;
       }
 
@@ -1560,7 +2710,12 @@ export function createPlatformServer({
         item.status = "disabled";
         appendAuditEvent(state, auth, "subagent.disabled", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { subagent_id: item.subagent_id, status: item.status });
+        sendJson(res, 200, {
+          subagent_id: item.subagent_id,
+          status: item.status,
+          review_status: item.review_status,
+          catalog_visibility: resolveCatalogVisibility(state, item)
+        });
         return;
       }
 
@@ -1577,11 +2732,20 @@ export function createPlatformServer({
           sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
           return;
         }
+        item.review_status = "approved";
         item.status = "enabled";
+        item.reviewed_at = nowIso();
+        item.reviewed_by = describeActor(auth).actor_id;
+        item.review_reason = body.reason || null;
         appendAuditEvent(state, auth, "subagent.approved", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null });
-        appendReviewEvent(state, auth, "approved", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null });
+        appendReviewEvent(state, auth, "approved", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null, seller_id: item.seller_id, subagent_id: item.subagent_id });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { subagent_id: item.subagent_id, status: item.status });
+        sendJson(res, 200, {
+          subagent_id: item.subagent_id,
+          status: item.status,
+          review_status: item.review_status,
+          catalog_visibility: resolveCatalogVisibility(state, item)
+        });
         return;
       }
 
@@ -1598,11 +2762,47 @@ export function createPlatformServer({
           sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
           return;
         }
+        item.review_status = "rejected";
         item.status = "disabled";
+        item.reviewed_at = nowIso();
+        item.reviewed_by = describeActor(auth).actor_id;
+        item.review_reason = body.reason || null;
         appendAuditEvent(state, auth, "subagent.rejected", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null });
-        appendReviewEvent(state, auth, "rejected", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null });
+        appendReviewEvent(state, auth, "rejected", { type: "subagent", id: item.subagent_id }, { reason: body.reason || null, seller_id: item.seller_id, subagent_id: item.subagent_id });
         await persistPlatformState(onStateChanged, state);
-        sendJson(res, 200, { subagent_id: item.subagent_id, status: item.status, review_status: "rejected" });
+        sendJson(res, 200, {
+          subagent_id: item.subagent_id,
+          status: item.status,
+          review_status: item.review_status,
+          catalog_visibility: resolveCatalogVisibility(state, item)
+        });
+        return;
+      }
+
+      const adminSubagentEnableMatch = pathname.match(/^\/v1\/admin\/subagents\/([^/]+)\/enable$/);
+      if (method === "POST" && adminSubagentEnableMatch) {
+        const auth = requireOperator(req, res, state);
+        if (!auth) {
+          return;
+        }
+        const item = state.catalog.get(adminSubagentEnableMatch[1]);
+        if (!item) {
+          sendError(res, 404, "CATALOG_SUBAGENT_NOT_FOUND", "subagent not found in catalog");
+          return;
+        }
+        if (item.review_status !== "approved") {
+          sendError(res, 409, "SUBAGENT_NOT_APPROVED", "subagent must be approved before it can be enabled");
+          return;
+        }
+        item.status = "enabled";
+        appendAuditEvent(state, auth, "subagent.enabled", { type: "subagent", id: item.subagent_id });
+        await persistPlatformState(onStateChanged, state);
+        sendJson(res, 200, {
+          subagent_id: item.subagent_id,
+          status: item.status,
+          review_status: item.review_status,
+          catalog_visibility: resolveCatalogVisibility(state, item)
+        });
         return;
       }
 
@@ -1652,7 +2852,12 @@ async function createOptionalPersistence(serviceName) {
 if (isDirectRun()) {
   const port = Number(process.env.PORT || 8080);
   const serviceName = process.env.SERVICE_NAME || "platform-api";
-  const state = createPlatformState();
+  if (!process.env.TOKEN_SECRET) {
+    throw new Error("platform_token_secret_required");
+  }
+  const state = createPlatformState({
+    tokenSecret: process.env.TOKEN_SECRET
+  });
   const persistence = await createOptionalPersistence(serviceName);
   if (persistence) {
     hydratePlatformState(state, await persistence.loadSnapshot());

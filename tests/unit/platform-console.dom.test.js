@@ -33,48 +33,72 @@ describe("platform-console dom flow", () => {
       vi.fn(async (input, init = {}) => {
         const url = typeof input === "string" ? new URL(input) : input;
         const pathname = url.pathname;
+        const proxiedPathname = pathname.startsWith("/proxy") ? pathname.slice("/proxy".length) || "/" : pathname;
         const params = url.searchParams;
 
-        if (pathname === "/healthz") {
+        if (pathname === "/session") {
+          return jsonResponse({
+            session: {
+              setup_required: false,
+              authenticated: true,
+              expires_at: "2026-03-17T00:00:00.000Z"
+            }
+          });
+        }
+        if (pathname === "/credentials/platform-admin") {
+          if ((init.method || "GET") === "GET") {
+            return jsonResponse({
+              platform_url: "http://127.0.0.1:8080",
+              api_key_configured: true
+            });
+          }
+          return jsonResponse({
+            ok: true,
+            platform_url: "http://127.0.0.1:8080",
+            api_key_configured: true
+          });
+        }
+
+        if (proxiedPathname === "/healthz") {
           return jsonResponse({ ok: true, service: "platform-api" });
         }
-        if (pathname === "/v1/metrics/summary") {
+        if (proxiedPathname === "/v1/metrics/summary") {
           return jsonResponse({ total_events: 2, by_type: { "seller.disabled": 1 } });
         }
-        if (pathname === "/v1/admin/sellers") {
+        if (proxiedPathname === "/v1/admin/sellers") {
           return jsonResponse({
             items: [{ seller_id: "seller_a", contact_email: "a@test.local", subagent_count: 1, status: "disabled" }],
             pagination: { total: 1, limit: Number(params.get("limit") || 8), offset: 0, has_more: false }
           });
         }
-        if (pathname === "/v1/admin/subagents") {
+        if (proxiedPathname === "/v1/admin/subagents") {
           return jsonResponse({
             items: [{ subagent_id: "subagent_a", display_name: "Subagent A", capabilities: ["text.classify"], status: "disabled" }],
             pagination: { total: 1, limit: Number(params.get("limit") || 8), offset: 0, has_more: false }
           });
         }
-        if (pathname === "/v1/admin/requests") {
+        if (proxiedPathname === "/v1/admin/requests") {
           return jsonResponse({
             items: [{ request_id: "req_admin_1", event_count: 1, latest_event: { event_type: "ACKED" } }],
             pagination: { total: 1, limit: Number(params.get("limit") || 8), offset: 0, has_more: false }
           });
         }
-        if (pathname === "/v1/catalog/subagents") {
+        if (proxiedPathname === "/v1/catalog/subagents") {
           return jsonResponse({ items: [{ subagent_id: "subagent_a" }] });
         }
-        if (pathname === "/v1/admin/audit-events") {
+        if (proxiedPathname === "/v1/admin/audit-events") {
           return jsonResponse({
             items: [{ id: "audit_1", action: "seller.disabled", target_type: "seller", target_id: "seller_a", actor_type: "admin", recorded_at: "now", reason: "policy" }],
             pagination: { total: 1, limit: Number(params.get("limit") || 8), offset: 0, has_more: false }
           });
         }
-        if (pathname === "/v1/admin/reviews") {
+        if (proxiedPathname === "/v1/admin/reviews") {
           return jsonResponse({
             items: [{ id: "review_1", target_type: "seller", target_id: "seller_a", review_status: "pending", actor_type: "buyer", recorded_at: "now", reason: "awaiting review" }],
             pagination: { total: 1, limit: Number(params.get("limit") || 8), offset: 0, has_more: false }
           });
         }
-        if (pathname.endsWith("/approve") || pathname.endsWith("/reject") || pathname.endsWith("/disable")) {
+        if (proxiedPathname.endsWith("/approve") || proxiedPathname.endsWith("/reject") || proxiedPathname.endsWith("/disable")) {
           lastActionReason = JSON.parse(init.body || "{}").reason;
           return jsonResponse({ ok: true });
         }

@@ -81,7 +81,27 @@ jobs:
           docker pull node:22-alpine
       - run: npm run test:compose-smoke:strict
 
-  published-image-compose-smoke:
+  public-stack-compose-smoke:
+    runs-on: ubuntu-latest
+    env:
+      IMAGE_REGISTRY: local
+      IMAGE_TAG: ci
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Warm base images
+        run: |
+          set -euo pipefail
+          docker pull postgres:16-alpine
+          docker pull node:22-alpine
+          docker pull caddy:2-alpine
+      - run: npm run test:public-stack-smoke
+
+  local-release-image-compose-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,9 +121,9 @@ jobs:
           export IMAGE_REGISTRY=local
           export IMAGE_TAG=ci
           docker compose -f deploy/all-in-one/docker-compose.yml --env-file deploy/all-in-one/.env.example build
-      - name: Smoke published-image path
+      - name: Smoke local release-shaped image path
         run: |
           set -euo pipefail
           export IMAGE_REGISTRY=local
           export IMAGE_TAG=ci
-          npm run test:published-images-smoke
+          npm run test:local-images-smoke

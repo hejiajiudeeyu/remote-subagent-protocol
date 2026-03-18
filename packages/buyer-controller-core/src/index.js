@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
 
 export const BUYER_TERMINAL_STATUSES = Object.freeze(["SUCCEEDED", "FAILED", "UNVERIFIED", "TIMED_OUT"]);
 export const BUYER_ACTIVE_STATUSES = Object.freeze(["CREATED", "SENT", "ACKED"]);
@@ -42,8 +42,8 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
-  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+function sendError(res, statusCode, code, message, { retryable, ...extra } = {}) {
+  sendJson(res, statusCode, buildStructuredError(code, message, { retryable, ...extra }));
 }
 
 async function requestJson(baseUrl, pathname, { method = "GET", headers = {}, body } = {}) {
@@ -86,7 +86,8 @@ export function loadBuyerConfig() {
     timeout_confirmation_mode: process.env.TIMEOUT_CONFIRMATION_MODE || "ask_by_default",
     hard_timeout_auto_finalize: String(process.env.HARD_TIMEOUT_AUTO_FINALIZE || "true") === "true",
     poll_interval_active_s: Number(process.env.BUYER_CONTROLLER_POLL_INTERVAL_ACTIVE_S || 5),
-    poll_interval_backoff_s: Number(process.env.BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S || 15)
+    poll_interval_backoff_s: Number(process.env.BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S || 15),
+    events_sync_batch_size: Number(process.env.BUYER_CONTROLLER_EVENTS_SYNC_BATCH_SIZE || 25)
   };
 }
 
@@ -131,6 +132,11 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
   }
 
   return {
+    config: {
+      baseUrl,
+      apiKey: apiKey || null
+    },
+
     async registerBuyer({ contactEmail, contact_email, email } = {}) {
       const response = await requestJson(baseUrl, "/v1/users/register", {
         method: "POST",
@@ -245,6 +251,22 @@ export function createBuyerPlatformClient({ baseUrl, apiKey } = {}) {
 
       if (response.status !== 200) {
         throw createUpstreamError("BUYER_PLATFORM_EVENTS_FAILED", response);
+      }
+
+      return response.body;
+    },
+
+    async getRequestEventsBatch(requestIds = []) {
+      const response = await requestJson(baseUrl, "/v1/requests/events/batch", {
+        method: "POST",
+        headers: authHeaders(true),
+        body: {
+          request_ids: Array.isArray(requestIds) ? requestIds : []
+        }
+      });
+
+      if (response.status !== 200) {
+        throw createUpstreamError("BUYER_PLATFORM_EVENTS_BATCH_FAILED", response);
       }
 
       return response.body;
@@ -665,22 +687,69 @@ async function pollBuyerInbox(
 
 async function syncBuyerActiveRequests(state, config, platformClientFactory, onStateChanged) {
   let mutated = false;
+  const activeGroups = new Map();
+  const requestClients = new Map();
 
   for (const request of state.requests.values()) {
-    const platformClient = platformClientFactory(request);
-    if (platformClient && isBuyerRequestActive(request)) {
-      try {
-        const synced = await syncBuyerRequestEvents(request, platformClient);
-        if (synced.acked) {
-          await reportBuyerMetric(platformClient, request, "buyer.request.acked");
-        }
-        mutated = true;
-      } catch {
-        // ignore background sync failures; foreground APIs still expose explicit sync
-      }
+    const platformClient = typeof platformClientFactory === "function" ? platformClientFactory(request) : null;
+    requestClients.set(request.request_id, platformClient);
+
+    if (!platformClient || !isBuyerRequestActive(request)) {
+      continue;
     }
 
-    const transition = await evaluateTimeoutsWithMetrics(request, config, platformClient);
+    const clientKey = `${platformClient.config?.baseUrl || "unknown"}::${platformClient.config?.apiKey || "anonymous"}`;
+    const existingGroup = activeGroups.get(clientKey) || {
+      client: platformClient,
+      requests: []
+    };
+    existingGroup.requests.push(request);
+    activeGroups.set(clientKey, existingGroup);
+  }
+
+  const batchSize = Math.max(1, Number(config.events_sync_batch_size || 25));
+
+  for (const group of activeGroups.values()) {
+    const { client: platformClient, requests } = group;
+    for (let index = 0; index < requests.length; index += batchSize) {
+      const batch = requests.slice(index, index + batchSize);
+      const requestIds = batch.map((request) => request.request_id);
+      try {
+        const response = await platformClient.getRequestEventsBatch(requestIds);
+        const byRequestId = new Map((response.items || []).map((item) => [item.request_id, item]));
+        for (const request of batch) {
+          const item = byRequestId.get(request.request_id);
+          if (!item || item.found === false) {
+            continue;
+          }
+          const synced = applyPlatformEventsToRequest(request, item.events || item.items || []);
+          if (synced.acked) {
+            await reportBuyerMetric(platformClient, request, "buyer.request.acked");
+          }
+          mutated = true;
+        }
+      } catch {
+        for (const request of batch) {
+          try {
+            const synced = await syncBuyerRequestEvents(request, platformClient);
+            if (synced.acked) {
+              await reportBuyerMetric(platformClient, request, "buyer.request.acked");
+            }
+            mutated = true;
+          } catch {
+            // ignore background sync failures; foreground APIs still expose explicit sync
+          }
+        }
+      }
+    }
+  }
+
+  for (const request of state.requests.values()) {
+    const transition = await evaluateTimeoutsWithMetrics(
+      request,
+      config,
+      requestClients.get(request.request_id) || null
+    );
     mutated ||= Boolean(transition);
   }
 
@@ -888,7 +957,10 @@ export function createTaskContractDraft(request, body = {}) {
 
 export async function syncBuyerRequestEvents(request, platformClient) {
   const response = await platformClient.getRequestEvents(request.request_id);
-  const events = response.events || response.items || [];
+  return applyPlatformEventsToRequest(request, response.events || response.items || []);
+}
+
+export function applyPlatformEventsToRequest(request, events = []) {
   request.platform_events = events;
   request.platform_last_event = events.length > 0 ? events[events.length - 1] : null;
 

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
 import {
   createConfiguredSubagentExecutor,
   createExampleFunctionExecutor,
@@ -44,8 +44,8 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
-  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+function sendError(res, statusCode, code, message, { retryable, ...extra } = {}) {
+  sendJson(res, statusCode, buildStructuredError(code, message, { retryable, ...extra }));
 }
 
 async function postJson(baseUrl, pathname, { method = "POST", headers = {}, body } = {}) {
@@ -536,6 +536,7 @@ async function failTask(task, state, transport, platform, error) {
 }
 
 export function createSellerState(options = {}) {
+  const workerConcurrency = Math.max(1, Number(options.workerConcurrency || process.env.SELLER_WORKER_CONCURRENCY || 1));
   const signing = options.signing
     ? {
         privateKey: crypto.createPrivateKey(options.signing.privateKeyPem),
@@ -553,7 +554,8 @@ export function createSellerState(options = {}) {
     tasks: new Map(),
     requestIndex: new Map(),
     queue: [],
-    processing: false,
+    activeTaskIds: [],
+    workerConcurrency,
     signing,
     identity: {
       seller_id: options.sellerId || "seller_foxlab",
@@ -572,7 +574,8 @@ export function serializeSellerState(state) {
     tasks: Array.from(state.tasks.entries()),
     requestIndex: Array.from(state.requestIndex.entries()),
     queue: [...state.queue],
-    processing: state.processing,
+    activeTaskIds: [...(state.activeTaskIds || [])],
+    workerConcurrency: state.workerConcurrency,
     identity: state.identity,
     subagents: state.subagents,
     heartbeat: state.heartbeat
@@ -595,7 +598,8 @@ export function hydrateSellerState(state, snapshot) {
   }
 
   state.queue = Array.isArray(snapshot.queue) ? [...snapshot.queue] : [];
-  state.processing = false;
+  state.activeTaskIds = [];
+  state.workerConcurrency = Math.max(1, Number(snapshot.workerConcurrency || state.workerConcurrency || 1));
   state.identity = snapshot.identity || state.identity;
   state.subagents = Array.isArray(snapshot.subagents) ? snapshot.subagents : state.subagents;
   state.heartbeat = snapshot.heartbeat || state.heartbeat;
@@ -612,53 +616,68 @@ function rememberTask(state, task) {
   state.requestIndex.set(task.request_id, task.task_id);
 }
 
-function scheduleProcessQueue(state, { executor, transport = null, platform = null, onStateChanged = null } = {}) {
-  if (state.processing) {
-    return;
-  }
-
-  const nextTaskId = state.queue.shift();
-  if (!nextTaskId) {
-    return;
-  }
-
-  const task = state.tasks.get(nextTaskId);
-  if (!task) {
-    scheduleProcessQueue(state, { executor, transport, platform, onStateChanged });
-    return;
-  }
-
-  task.status = "RUNNING";
-  task.started_at = nowIso();
-  task.lease_expires_at = new Date(Date.now() + task.lease_ttl_s * 1000).toISOString();
-  state.processing = true;
-
-  setTimeout(() => {
-    void (async () => {
-      try {
-        const execution = await executor.execute(createExecutorContext(task));
-        if (execution?.deferred === true) {
-          task.status = "RUNNING";
-          task.updated_at = nowIso();
-          task.deferred_reason = execution.reason || "deferred";
-          await persistSellerState(onStateChanged, state);
-        } else {
-          await finalizeTask(task, state, transport, platform, execution);
-          await persistSellerState(onStateChanged, state);
-        }
-      } catch (error) {
-        await failTask(task, state, transport, platform, error);
-        await persistSellerState(onStateChanged, state);
-      } finally {
-        state.processing = false;
-        await persistSellerState(onStateChanged, state);
-        scheduleProcessQueue(state, { executor, transport, platform, onStateChanged });
-      }
-    })();
-  }, task.delay_ms);
+function workerConcurrencyForState(state, override = null) {
+  return Math.max(1, Number(override || state.workerConcurrency || 1));
 }
 
-async function enqueueTask(state, task, { executor, transport = null, platform = null, onStateChanged = null } = {}) {
+async function runQueuedTask(task, state, { executor, transport = null, platform = null, onStateChanged = null } = {}) {
+  await persistSellerState(onStateChanged, state);
+  await new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(task.delay_ms || 0))));
+
+  try {
+    const execution = await executor.execute(createExecutorContext(task));
+    if (execution?.deferred === true) {
+      task.status = "RUNNING";
+      task.updated_at = nowIso();
+      task.deferred_reason = execution.reason || "deferred";
+      await persistSellerState(onStateChanged, state);
+    } else {
+      await finalizeTask(task, state, transport, platform, execution);
+      await persistSellerState(onStateChanged, state);
+    }
+  } catch (error) {
+    await failTask(task, state, transport, platform, error);
+    await persistSellerState(onStateChanged, state);
+  } finally {
+    state.activeTaskIds = (state.activeTaskIds || []).filter((taskId) => taskId !== task.task_id);
+    await persistSellerState(onStateChanged, state);
+    scheduleProcessQueue(state, { executor, transport, platform, onStateChanged });
+  }
+}
+
+function scheduleProcessQueue(state, { executor, transport = null, platform = null, onStateChanged = null, workerConcurrency = null } = {}) {
+  const maxWorkers = workerConcurrencyForState(state, workerConcurrency);
+  while ((state.activeTaskIds || []).length < maxWorkers) {
+    const nextTaskId = state.queue.shift();
+    if (!nextTaskId) {
+      return;
+    }
+
+    const task = state.tasks.get(nextTaskId);
+    if (!task) {
+      continue;
+    }
+
+    task.status = "RUNNING";
+    task.started_at = nowIso();
+    task.updated_at = task.started_at;
+    task.lease_expires_at = new Date(Date.now() + task.lease_ttl_s * 1000).toISOString();
+    state.activeTaskIds = [...(state.activeTaskIds || []), task.task_id];
+
+    void runQueuedTask(task, state, {
+      executor,
+      transport,
+      platform,
+      onStateChanged
+    });
+  }
+}
+
+async function enqueueTask(
+  state,
+  task,
+  { executor, transport = null, platform = null, onStateChanged = null, workerConcurrency = null } = {}
+) {
   rememberTask(state, task);
   state.queue.push(task.task_id);
 
@@ -675,7 +694,7 @@ async function enqueueTask(state, task, { executor, transport = null, platform =
   });
 
   await persistSellerState(onStateChanged, state);
-  scheduleProcessQueue(state, { executor, transport, platform, onStateChanged });
+  scheduleProcessQueue(state, { executor, transport, platform, onStateChanged, workerConcurrency });
 }
 
 async function processSellerInbox(state, {
@@ -905,6 +924,8 @@ export function createSellerControllerServer({
   onStateChanged = null,
   onPlatformConfigured = null
 } = {}) {
+  const workerConcurrency = workerConcurrencyForState(state, background.workerConcurrency);
+  state.workerConcurrency = workerConcurrency;
   const server = http.createServer(async (req, res) => {
     const method = req.method || "GET";
     const url = new URL(req.url || "/", "http://localhost");
@@ -938,6 +959,7 @@ export function createSellerControllerServer({
           executor: executor.name || "unknown",
           seller_id: state.identity.seller_id,
           subagent_ids: state.identity.subagent_ids,
+          worker_concurrency: workerConcurrency,
           configured_subagents:
             typeof executor?.listSubagents === "function"
               ? executor.listSubagents()
@@ -1039,7 +1061,7 @@ export function createSellerControllerServer({
           return;
         }
 
-        await enqueueTask(state, task, { executor, transport, platform, onStateChanged });
+        await enqueueTask(state, task, { executor, transport, platform, onStateChanged, workerConcurrency });
 
         sendJson(res, 202, {
           accepted: true,
@@ -1048,7 +1070,8 @@ export function createSellerControllerServer({
           status: task.status,
           queue_policy: {
             mode: "priority_fifo",
-            lease_ttl_s: task.lease_ttl_s
+            lease_ttl_s: task.lease_ttl_s,
+            worker_concurrency: workerConcurrency
           }
         });
         return;
@@ -1077,7 +1100,10 @@ export function createSellerControllerServer({
 
       if (method === "GET" && pathname === "/controller/queue") {
         const queued = state.queue.map((taskId) => state.tasks.get(taskId)).filter(Boolean);
-        const running = Array.from(state.tasks.values()).filter((task) => task.status === "RUNNING");
+        const runningIds = new Set(state.activeTaskIds || []);
+        const running = Array.from(state.tasks.values()).filter(
+          (task) => task.status === "RUNNING" || runningIds.has(task.task_id)
+        );
         sendJson(res, 200, { queued, running });
         return;
       }

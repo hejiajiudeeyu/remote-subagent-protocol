@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 const commands = [
   ["docker", ["compose", "-f", "docker-compose.yml", "config"]],
   ["docker", ["compose", "-f", "deploy/platform/docker-compose.yml", "--env-file", "deploy/platform/.env.example", "config"]],
+  ["docker", ["compose", "-f", "deploy/public-stack/docker-compose.yml", "--env-file", "deploy/public-stack/.env.example", "config"]],
   ["docker", ["compose", "-f", "deploy/ops/docker-compose.yml", "--env-file", "deploy/ops/.env.example", "config"]],
   ["docker", ["compose", "-f", "deploy/relay/docker-compose.yml", "--env-file", "deploy/relay/.env.example", "config"]],
   ["docker", ["compose", "-f", "deploy/buyer/docker-compose.yml", "--env-file", "deploy/buyer/.env.example", "config"]],

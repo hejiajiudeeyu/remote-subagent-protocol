@@ -4,8 +4,10 @@ import { fileURLToPath } from "node:url";
 import { createBuyerControllerServer, createBuyerState, hydrateBuyerState, serializeBuyerState } from "@croc/buyer-controller-core";
 import { createPostgresSnapshotStore } from "@croc/postgres-store";
 import { createSqliteSnapshotStore } from "@croc/sqlite-store";
+import { createEmailEngineTransportAdapter } from "@croc/transport-emailengine";
+import { createGmailTransportAdapter } from "@croc/transport-gmail";
 import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "../../../scripts/env-files.mjs";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
 
 export * from "@croc/buyer-controller-core";
 
@@ -35,8 +37,32 @@ function loadPlatformConfigFromEnv() {
 }
 
 function loadTransportConfigFromEnv(serviceName) {
+  const transportType = process.env.TRANSPORT_TYPE || (process.env.TRANSPORT_BASE_URL ? "relay_http" : null);
+  if (transportType === "email") {
+    const provider = process.env.TRANSPORT_EMAIL_PROVIDER || process.env.TRANSPORT_PROVIDER || "unknown";
+    if (provider === "emailengine") {
+      return createEmailEngineTransportAdapter({
+        baseUrl: process.env.TRANSPORT_EMAILENGINE_BASE_URL,
+        account: process.env.TRANSPORT_EMAILENGINE_ACCOUNT,
+        accessToken: process.env.TRANSPORT_EMAILENGINE_ACCESS_TOKEN,
+        sender: process.env.TRANSPORT_EMAIL_SENDER || process.env.BUYER_CONTACT_EMAIL || null,
+        receiver: process.env.TRANSPORT_EMAIL_RECEIVER || null
+      });
+    }
+    if (provider === "gmail") {
+      return createGmailTransportAdapter({
+        clientId: process.env.TRANSPORT_GMAIL_CLIENT_ID,
+        clientSecret: process.env.TRANSPORT_GMAIL_CLIENT_SECRET,
+        refreshToken: process.env.TRANSPORT_GMAIL_REFRESH_TOKEN,
+        user: process.env.TRANSPORT_GMAIL_USER,
+        sender: process.env.TRANSPORT_EMAIL_SENDER || process.env.TRANSPORT_GMAIL_USER || null,
+        receiver: process.env.TRANSPORT_EMAIL_RECEIVER || null
+      });
+    }
+    throw new Error(`TRANSPORT_NOT_IMPLEMENTED: email transport provider ${provider} is not implemented yet`);
+  }
   const baseUrl = process.env.TRANSPORT_BASE_URL || null;
-  if (!baseUrl) {
+  if (!baseUrl || !transportType) {
     return null;
   }
 

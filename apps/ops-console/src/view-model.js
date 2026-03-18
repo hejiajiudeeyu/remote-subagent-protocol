@@ -41,7 +41,9 @@ export function renderSetupWizardMarkup(status) {
   const config = status?.config || {};
   const seller = config.seller || {};
   const buyer = config.buyer || {};
+  const buyerRegistered = buyer.api_key_configured === true;
   const subagents = seller.subagents || [];
+  const exampleConfigured = subagents.some((item) => item.subagent_id === "local.summary.v1");
   const submittedCount = subagents.filter((item) => item.submitted_for_review === true).length;
   const pendingReviewCount = subagents.filter((item) => item.submitted_for_review !== true).length;
   const steps = [
@@ -54,17 +56,19 @@ export function renderSetupWizardMarkup(status) {
     },
     {
       title: "Register Buyer",
-      done: Boolean(buyer.api_key),
+      done: buyerRegistered,
       detail: buyer.contact_email ? `Buyer: ${buyer.contact_email}` : "Create a buyer API key for local use.",
       action: "register-buyer",
       actionLabel: "Register Buyer"
     },
     {
-      title: "Add Local Subagent",
-      done: subagents.length > 0,
-      detail: subagents.length > 0 ? `${subagents.length} local subagent(s) configured.` : "Attach a local process/http subagent.",
-      action: "focus-subagent-form",
-      actionLabel: "Open Seller Form"
+      title: "Add Local Example",
+      done: exampleConfigured,
+      detail: exampleConfigured
+        ? "Official local.summary.v1 demo subagent is configured."
+        : "Install the official example subagent to learn the local seller shape.",
+      action: "add-example-subagent",
+      actionLabel: "Add Example"
     },
     {
       title: "Submit Review",
@@ -74,7 +78,7 @@ export function renderSetupWizardMarkup(status) {
         : "Submit local subagents to the platform review queue.",
       action: "submit-review",
       actionLabel: "Submit Review",
-      blockedReason: !buyer.api_key
+      blockedReason: !buyerRegistered
         ? "Register buyer before submitting review."
         : subagents.length === 0
           ? "Add at least one local subagent before review."
@@ -88,7 +92,7 @@ export function renderSetupWizardMarkup(status) {
       detail: seller.enabled === true ? "Seller runtime enabled locally." : "Enable the local seller runtime after review submission.",
       action: "enable-seller",
       actionLabel: "Enable Seller",
-      blockedReason: !buyer.api_key
+      blockedReason: !buyerRegistered
         ? "Register buyer before enabling seller."
         : subagents.length === 0
           ? "Add a local subagent before enabling seller."
@@ -123,9 +127,9 @@ export function renderSetupWizardMarkup(status) {
       <div class="item-head">
         <div>
           <strong>Onboarding Summary</strong>
-          <p>buyer ${buyer.api_key ? "registered" : "pending"} · seller ${seller.enabled ? "enabled" : "disabled"}</p>
+          <p>buyer ${buyerRegistered ? "registered" : "pending"} · seller ${seller.enabled ? "enabled" : "disabled"}</p>
         </div>
-        <span class="status ${buyer.api_key ? "healthy" : "disabled"}">${subagents.length} subagents</span>
+        <span class="status ${buyerRegistered ? "healthy" : "disabled"}">${subagents.length} subagents</span>
       </div>
       <p class="meta">Submitted: ${submittedCount} · Pending review: ${pendingReviewCount}</p>
     </article>
@@ -149,6 +153,11 @@ export function renderCatalogItemsMarkup(items) {
             <span class="status ${item.availability_status || "healthy"}">${item.availability_status || "healthy"}</span>
           </div>
           <p class="meta">${item.seller_id} · ${(item.capabilities || []).join(", ") || "no capabilities"}</p>
+          <p class="meta">${
+            item.subagent_id === "local.summary.v1" || (item.tags || []).includes("demo")
+              ? "local demo seller"
+              : "catalog / remote seller"
+          }</p>
         </article>
       `
     )
@@ -238,6 +247,53 @@ export function renderRequestDetailMarkup({ request, result }) {
   `;
 }
 
+export function renderTransportConfigMarkup(transport, lastTest = null) {
+  if (!transport) {
+    return `<div class="empty">Transport config not loaded yet.</div>`;
+  }
+
+  const details = [];
+  details.push(`type=${transport.type}`);
+  if (transport.type === "relay_http") {
+    details.push(`base_url=${transport.relay_http?.base_url || "unset"}`);
+  }
+  if (transport.type === "email") {
+    details.push(`provider=${transport.email?.provider || "unset"}`);
+    details.push(`sender=${transport.email?.sender || "unset"}`);
+    details.push(`receiver=${transport.email?.receiver || "unset"}`);
+    details.push(`poll=${transport.email?.poll_interval_ms || "unset"}ms`);
+    if (transport.email?.provider === "emailengine") {
+      details.push(`account=${transport.email?.emailengine?.account || "unset"}`);
+      details.push(`token=${transport.email?.emailengine?.access_token_configured ? "configured" : "missing"}`);
+    }
+    if (transport.email?.provider === "gmail") {
+      details.push(`user=${transport.email?.gmail?.user || "unset"}`);
+      details.push(`client_secret=${transport.email?.gmail?.client_secret_configured ? "configured" : "missing"}`);
+      details.push(`refresh_token=${transport.email?.gmail?.refresh_token_configured ? "configured" : "missing"}`);
+    }
+  }
+
+  const lastTestMarkup = lastTest
+    ? `<div class="item-card">
+        <strong>Last Test</strong>
+        <pre class="output compact">${JSON.stringify(lastTest, null, 2)}</pre>
+      </div>`
+    : `<div class="empty">No connection test run yet.</div>`;
+
+  return `
+    <article class="item-card">
+      <div class="item-head">
+        <div>
+          <strong>Runtime Transport</strong>
+          <p>${details.join(" · ")}</p>
+        </div>
+        <span class="status ${transport.type === "email" ? "pending" : "healthy"}">${transport.type}</span>
+      </div>
+    </article>
+    ${lastTestMarkup}
+  `;
+}
+
 export function renderSellerSubagentsMarkup(items) {
   if (!Array.isArray(items) || items.length === 0) {
     return `<div class="empty">No local subagents configured yet.</div>`;
@@ -255,6 +311,7 @@ export function renderSellerSubagentsMarkup(items) {
           </div>
           <p class="meta">${item.adapter_type || "process"} · ${(item.capabilities || []).join(", ") || "no capabilities"}</p>
           <p class="meta">Review: ${item.review_status || "local_only"} · ${item.submitted_for_review ? "submitted" : "local only"}</p>
+          <p class="meta">${item.subagent_id === "local.summary.v1" ? "official local demo seller" : "custom local seller"}</p>
           <div class="actions">
             <button data-subagent-action="edit" data-subagent-id="${item.subagent_id}">Edit</button>
             ${

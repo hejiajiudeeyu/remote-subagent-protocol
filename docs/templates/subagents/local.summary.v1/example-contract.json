@@ -1,0 +1,25 @@
+{
+  "request_id": "req_local_summary_example_1",
+  "seller_id": "seller_local_demo",
+  "subagent_id": "local.summary.v1",
+  "task": {
+    "task_type": "text_summarize",
+    "input": {
+      "text": "Summarize this local example request."
+    },
+    "output_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["summary"],
+      "properties": {
+        "summary": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "constraints": {
+    "soft_timeout_s": 60,
+    "hard_timeout_s": 180
+  }
+}

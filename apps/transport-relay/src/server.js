@@ -3,8 +3,9 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { buildStructuredError } from "@croc/contracts";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
 import Database from "better-sqlite3";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "../../../scripts/env-files.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,8 +38,8 @@ function sendJson(res, statusCode, data) {
   res.end(JSON.stringify(data));
 }
 
-function sendError(res, statusCode, code, message, { retryable = false, ...extra } = {}) {
-  sendJson(res, statusCode, { error: { code, message, retryable }, ...extra });
+function sendError(res, statusCode, code, message, { retryable, ...extra } = {}) {
+  sendJson(res, statusCode, buildStructuredError(code, message, { retryable, ...extra }));
 }
 
 function parseJsonBody(req) {
@@ -112,7 +113,7 @@ function createSqliteRelayStore(databasePath) {
       PRIMARY KEY (receiver, message_id)
     );
     CREATE INDEX IF NOT EXISTS idx_relay_messages_receiver_queued_at
-      ON relay_messages (receiver, queued_at, rowid);
+      ON relay_messages (receiver, queued_at, message_id);
   `);
 
   return {
@@ -128,7 +129,7 @@ function createSqliteRelayStore(databasePath) {
         .prepare(
           `SELECT envelope_json FROM relay_messages
            WHERE receiver = ?
-           ORDER BY queued_at ASC, rowid ASC
+           ORDER BY queued_at ASC, message_id ASC
            LIMIT ?`
         )
         .all(receiver, limit)
@@ -140,8 +141,8 @@ function createSqliteRelayStore(databasePath) {
     },
     peek(receiver, threadId = null) {
       const sql = threadId
-        ? `SELECT envelope_json FROM relay_messages WHERE receiver = ? AND thread_id = ? ORDER BY queued_at ASC, rowid ASC`
-        : `SELECT envelope_json FROM relay_messages WHERE receiver = ? ORDER BY queued_at ASC, rowid ASC`;
+        ? `SELECT envelope_json FROM relay_messages WHERE receiver = ? AND thread_id = ? ORDER BY queued_at ASC, message_id ASC`
+        : `SELECT envelope_json FROM relay_messages WHERE receiver = ? ORDER BY queued_at ASC, message_id ASC`;
       const rows = threadId ? db.prepare(sql).all(receiver, threadId) : db.prepare(sql).all(receiver);
       return rows.map((row) => JSON.parse(row.envelope_json));
     },

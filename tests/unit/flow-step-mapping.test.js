@@ -38,7 +38,7 @@ function collectReferencedStepIdsFromE2e(source) {
 
 describe("flow step id mapping", () => {
   it("keeps e2e referenced flow_step_id aligned with sequence diagram", () => {
-    const diagramPath = path.resolve(process.cwd(), "docs/diagrams/user-remote-subagent-call-flow.md");
+    const diagramPath = path.resolve(process.cwd(), "docs/current/diagrams/user-remote-subagent-call-flow.md");
     const diagramText = readText(diagramPath);
     const diagramIds = collectDiagramStepIds(diagramText);
 

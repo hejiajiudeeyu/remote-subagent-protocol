@@ -35,21 +35,22 @@
 
 ## 核心文档
 
-- [L0 文档索引](docs/l0/README.md)
-- [架构基线](docs/l0/architecture.md)
-- [协议控制面 API](docs/l0/platform-api-v0.1.md)
-- [接入手册](docs/l0/integration-playbook.md)
-- [默认参数](docs/l0/defaults-v0.1.md)
-- [Post-L0 演进规划](docs/post-l0-evolution.md)
-- [适用范围](docs/remote-subagent-scope.md)
-- [Buyer 接入 Remote Subagent Skills 说明](docs/buyer-remote-subagent-skills.md)
-- [OpenClaw 适配指南](docs/openclaw-adapter.md)
-- [架构图索引](docs/diagrams/README.md)
-- [研发追踪](docs/l0/development-tracker.md)
-- [部署指南](docs/deployment-guide.md)
-- [Release 兼容矩阵](docs/releases/compatibility-matrix.md)
-- [L0 收尾清单](docs/l0/l0-closeout-checklist.md)
-- [Release 流程](docs/release-process.md)
+- [当前文档索引](docs/current/README.md)
+- [架构基线](docs/current/spec/architecture.md)
+- [协议控制面 API](docs/current/spec/platform-api-v0.1.md)
+- [接入手册](docs/current/guides/integration-playbook.md)
+- [默认参数](docs/current/spec/defaults-v0.1.md)
+- [规划路线图](docs/planned/roadmap/evolution-roadmap.md)
+- [适用范围](docs/current/spec/remote-subagent-scope.md)
+- [Buyer 接入 Remote Subagent Skills 说明](docs/planned/design/buyer-remote-subagent-skills.md)
+- [OpenClaw 适配指南](docs/planned/design/openclaw-adapter.md)
+- [架构图索引](docs/current/diagrams/README.md)
+- [当前实现状态](docs/current/status/current-implementation-status.md)
+- [部署指南](docs/current/guides/deployment-guide.md)
+- [产品可用性边界](docs/current/guides/product-readiness-boundary.md)
+- [Release 兼容矩阵](docs/archive/releases/compatibility-matrix.md)
+- [当前收尾清单](docs/current/status/current-closeout-checklist.md)
+- [Release 流程](docs/current/guides/release-process.md)
 - [协议 Playground](site/protocol-playground.html)
 
 ## 参考实现
@@ -62,6 +63,7 @@
 
 ## 终端用户 Ops 客户端
 
+- `npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080`：单命令完成本地 buyer / seller bootstrap
 - `npm run ops -- setup`：初始化统一本地客户端，配置写入 `~/.remote-subagent`
 - `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080`：注册 buyer API key
 - `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`：接入一个本地 seller subagent
@@ -84,16 +86,23 @@
 ## Web 控制台
 
 - `npm run dev:ops-console`：buyer / seller 共用用户控制台
-- `npm run dev:platform-console`：平台管理控制台（使用 `PLATFORM_ADMIN_API_KEY`）
+- `npm run dev:platform-console-gateway`：`platform-console` 使用的本地 operator gateway
+- `npm run dev:platform-console`：平台管理控制台前端
 - `ops-console` 已包含 setup wizard、请求 timeline / result 面板、runtime alerts 和本地 debug snapshot
-- `platform-console` 已包含 reviewer guidance、review/audit 历史摘要，以及基于 reviewer notes 的 approve / reject / disable 操作
+- `ops-console` 现在支持本地 passphrase 解锁；敏感信息写入 `~/.remote-subagent/secrets.enc.json`，不再放在浏览器存储中
+- `platform-console` 现在必须通过 `platform-console-gateway` 访问平台管理接口；浏览器不再直接保存 `PLATFORM_ADMIN_API_KEY`
+- `platform-console` 仍包含 reviewer guidance、review/audit 历史摘要，以及基于 reviewer notes 的 approve / reject / enable / disable 操作，并在 subagent 详情中展示最近一次隐藏审核测试结论
 
 ## 部署入口
 
-- 终端用户安装 buyer / seller 的主路径：`npx @croc/ops setup -> auth register -> add-subagent -> submit-review -> enable-seller -> start`
+- 终端用户安装 buyer / seller 的主路径：`npm install && npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080`
+- 手动路径：`npm install -> npm run ops -- setup -> auth register -> add-subagent -> submit-review -> enable-seller -> start`
 - 完整终端用户步骤与排障说明见 [deploy/ops](deploy/ops)
+- AI 辅助终端用户部署说明见 [End-User AI Deployment Guide](docs/current/guides/end-user-ai-deployment-guide.md)
 - 终端用户本地日志默认写入 `~/.remote-subagent/logs`，`ops-console` 通过 supervisor 读取这些日志
 - Docker / Compose 继续主要用于 platform、relay、CI、本地联调和高级独立部署
+- `make deploy-public-stack`：首个面向 operator 的公网入口 bundle
+- `npm run test:public-stack-smoke`：验证公网入口 bundle
 - `make deploy-platform`：独立部署 `platform-api` + PostgreSQL
 - `make deploy-ops`：统一用户端分发入口（默认 buyer，seller 按需开启）
 - `make deploy-relay`：独立部署共享 transport relay
@@ -101,9 +110,16 @@
 - `make deploy-seller`：独立部署 `seller-controller`
 - `make deploy-all`：单机联调整套系统
 
+部署说明：
+
+- `deploy/platform` 现在默认按生产导向配置，不会自动启用 bootstrap demo seller
+- 需要本地 / 演示用的预置 bootstrap actor 时，优先使用 `deploy/all-in-one`，或在 platform 环境中显式设置 `ENABLE_BOOTSTRAP_SELLERS=true`
+
 部署目录位于：
 
 - [deploy/platform](deploy/platform)
+- [deploy/public-stack](deploy/public-stack)
+- [Public Stack Operator Guide](docs/current/guides/public-stack-operator-guide.md)
 - [deploy/ops](deploy/ops)
 - [deploy/relay](deploy/relay)
 - [deploy/buyer](deploy/buyer)

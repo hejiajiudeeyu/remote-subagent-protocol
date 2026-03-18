@@ -1,0 +1,11 @@
+{
+  "status": "ok",
+  "output": {
+    "summary": "Summarize this local example request."
+  },
+  "schema_valid": true,
+  "usage": {
+    "tokens_in": 1,
+    "tokens_out": 1
+  }
+}

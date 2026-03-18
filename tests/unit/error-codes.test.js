@@ -1,64 +1,33 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_DOMAIN, REQUEST_STATUS } from "@croc/contracts";
+import {
+  ERROR_DOMAIN,
+  ERROR_REGISTRY,
+  REQUEST_STATUS,
+  buildStructuredError,
+  getErrorDomain,
+  isKnownErrorCode,
+  isRetryableErrorCode
+} from "@croc/contracts";
 
 describe("error codes and retryable markers", () => {
-  const KNOWN_ERROR_CODES = {
-    AUTH: [
-      "AUTH_UNAUTHORIZED",
-      "AUTH_TOKEN_INVALID",
-      "AUTH_TOKEN_EXPIRED",
-      "AUTH_RESOURCE_FORBIDDEN"
-    ],
-    CONTRACT: [
-      "CONTRACT_REJECTED",
-      "CONTRACT_TIMEOUT_EXCEEDS_SELLER_LIMIT"
-    ],
-    EXEC: [
-      "EXEC_TIMEOUT_HARD",
-      "EXEC_TIMEOUT_MANUAL_STOP",
-      "EXEC_INTERNAL_ERROR",
-      "EXEC_UNKNOWN"
-    ],
-    RESULT: [
-      "RESULT_CONTEXT_MISMATCH",
-      "RESULT_SIGNATURE_INVALID",
-      "RESULT_SCHEMA_INVALID"
-    ],
-    DELIVERY: [
-      "DELIVERY_OR_ACCEPTANCE_TIMEOUT"
-    ]
-  };
-
-  const NON_RETRYABLE_CODES = new Set([
-    "AUTH_TOKEN_EXPIRED",
-    "AUTH_RESOURCE_FORBIDDEN",
-    "CONTRACT_REJECTED",
-    "RESULT_CONTEXT_MISMATCH",
-    "RESULT_SIGNATURE_INVALID",
-    "RESULT_SCHEMA_INVALID",
-    "EXEC_TIMEOUT_MANUAL_STOP"
-  ]);
-
-  const RETRYABLE_CODES = new Set([
-    "DELIVERY_OR_ACCEPTANCE_TIMEOUT",
-    "EXEC_INTERNAL_ERROR",
-    "AUTH_TOKEN_INVALID"
-  ]);
-
   it("every known error code has a valid domain prefix", () => {
     const domains = new Set(Object.values(ERROR_DOMAIN));
-
-    for (const [domain, codes] of Object.entries(KNOWN_ERROR_CODES)) {
+    for (const code of Object.keys(ERROR_REGISTRY)) {
+      const domain = getErrorDomain(code);
       expect(domains).toContain(domain);
-      for (const code of codes) {
-        expect(code).toMatch(new RegExp(`^${domain}_`));
-      }
+      expect(code).toMatch(new RegExp(`^${domain}_`));
     }
   });
 
   it("non-retryable codes should not overlap with retryable codes", () => {
-    const overlap = [...NON_RETRYABLE_CODES].filter((c) => RETRYABLE_CODES.has(c));
+    const retryable = Object.entries(ERROR_REGISTRY)
+      .filter(([, meta]) => meta.retryable === true)
+      .map(([code]) => code);
+    const nonRetryable = Object.entries(ERROR_REGISTRY)
+      .filter(([, meta]) => meta.retryable !== true)
+      .map(([code]) => code);
+    const overlap = nonRetryable.filter((code) => retryable.includes(code));
     expect(overlap).toEqual([]);
   });
 
@@ -95,5 +64,19 @@ describe("error codes and retryable markers", () => {
     for (const value of Object.values(ERROR_DOMAIN)) {
       expect(value).toMatch(/^[A-Z]+$/);
     }
+  });
+
+  it("exposes retryable defaults through helper functions", () => {
+    expect(isKnownErrorCode("AUTH_TOKEN_EXPIRED")).toBe(true);
+    expect(isRetryableErrorCode("AUTH_TOKEN_EXPIRED")).toBe(false);
+    expect(isRetryableErrorCode("AUTH_TOKEN_INVALID")).toBe(true);
+    expect(isKnownErrorCode("UNKNOWN_CODE")).toBe(false);
+    expect(isRetryableErrorCode("UNKNOWN_CODE")).toBe(false);
+  });
+
+  it("buildStructuredError uses registry retryable defaults unless overridden", () => {
+    expect(buildStructuredError("AUTH_TOKEN_INVALID", "invalid").error.retryable).toBe(true);
+    expect(buildStructuredError("AUTH_TOKEN_INVALID", "invalid", { retryable: false }).error.retryable).toBe(false);
+    expect(buildStructuredError("UNKNOWN_CODE", "unknown").error.retryable).toBe(false);
   });
 });

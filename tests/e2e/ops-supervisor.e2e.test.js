@@ -152,4 +152,85 @@ describe("e2e: ops supervisor path", () => {
       }
     });
   });
+
+  it("completes the official local example self-call path", async () => {
+    await runCase({
+      caseId: "e2e_ops_example_success",
+      name: "official local example should complete buyer to seller self-call",
+      fallbackStepId: "H2-S1",
+      run: async () => {
+        const sellerId = "seller_ops_example_e2e";
+        const buyer = await jsonRequest(supervisorUrl, "/auth/register-buyer", {
+          method: "POST",
+          body: { contact_email: "ops-example-e2e@test.local" }
+        });
+        expect(buyer.status).toBe(201);
+
+        const addExample = await jsonRequest(supervisorUrl, "/seller/subagents/example", {
+          method: "POST",
+          body: {}
+        });
+        expect(addExample.status).toBe(201);
+        expect(addExample.body.subagent_id).toBe("local.summary.v1");
+
+        const review = await jsonRequest(supervisorUrl, "/seller/submit-review", {
+          method: "POST",
+          body: { seller_id: sellerId, display_name: "Ops Example Seller" }
+        });
+        expect(review.status).toBe(201);
+
+        const enable = await jsonRequest(supervisorUrl, "/seller/enable", {
+          method: "POST",
+          body: { seller_id: sellerId, display_name: "Ops Example Seller" }
+        });
+        expect(enable.status).toBe(200);
+
+        const adminHeader = { Authorization: `Bearer ${platformState.adminApiKey}` };
+        const approveSeller = await jsonRequest(platformUrl, `/v1/admin/sellers/${sellerId}/approve`, {
+          method: "POST",
+          headers: adminHeader,
+          body: { reason: "e2e approve example seller" }
+        });
+        expect(approveSeller.status).toBe(200);
+
+        const approveSubagent = await jsonRequest(platformUrl, "/v1/admin/subagents/local.summary.v1/approve", {
+          method: "POST",
+          headers: adminHeader,
+          body: { reason: "e2e approve example subagent" }
+        });
+        expect(approveSubagent.status).toBe(200);
+
+        await waitFor(async () => {
+          const catalog = await jsonRequest(supervisorUrl, "/catalog/subagents?subagent_id=local.summary.v1");
+          const item = catalog.body?.items?.find((entry) => entry.subagent_id === "local.summary.v1");
+          if (!item) {
+            throw new Error("catalog_not_ready");
+          }
+          return item;
+        });
+
+        const started = await jsonRequest(supervisorUrl, "/requests/example", {
+          method: "POST",
+          body: {
+            text: "Summarize this local demo request."
+          }
+        });
+        expect(started.status).toBe(201);
+
+        const requestId = started.body.request_id;
+        const final = await waitFor(async () => {
+          const current = await jsonRequest(supervisorUrl, `/requests/${requestId}`);
+          if (!["SUCCEEDED", "UNVERIFIED", "FAILED"].includes(current.body.status)) {
+            throw new Error("result_not_ready");
+          }
+          return current;
+        }, { timeoutMs: 5000, intervalMs: 100 });
+        expect(final.body.status).toBe("SUCCEEDED");
+
+        const result = await jsonRequest(supervisorUrl, `/requests/${requestId}/result`);
+        expect(result.status).toBe(200);
+        expect(result.body.result_package.output.summary).toBe("Summarize this local demo request.");
+      }
+    });
+  });
 });

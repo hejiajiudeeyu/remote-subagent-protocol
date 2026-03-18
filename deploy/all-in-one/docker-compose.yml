@@ -2,7 +2,7 @@ name: croc-tavern-mvp
 
 services:
   relay:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-relay:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-relay:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -34,7 +34,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   platform-api:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-platform:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-platform:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -44,6 +44,7 @@ services:
       PORT: 8080
       SERVICE_NAME: platform-api
       DATABASE_URL: postgresql://croc:croc@postgres:5432/croc
+      TOKEN_SECRET: ${TOKEN_SECRET:-all-in-one-dev-token-secret}
       BOOTSTRAP_SELLER_ID: seller_foxlab
       BOOTSTRAP_SUBAGENT_ID: foxlab.text.classifier.v1
       BOOTSTRAP_TASK_DELIVERY_ADDRESS: local://relay/seller_foxlab/foxlab.text.classifier.v1
@@ -57,7 +58,7 @@ services:
         condition: service_healthy
 
   buyer-controller:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-buyer:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-buyer:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -76,6 +77,7 @@ services:
       BUYER_CONTROLLER_POLL_INTERVAL_BACKOFF_S: "15"
       BUYER_CONTROLLER_INBOX_POLL_INTERVAL_MS: "250"
       BUYER_CONTROLLER_EVENTS_SYNC_INTERVAL_MS: "250"
+      BUYER_CONTROLLER_EVENTS_SYNC_BATCH_SIZE: "25"
     ports:
       - "8081:8081"
     depends_on:
@@ -85,7 +87,7 @@ services:
         condition: service_started
 
   seller-controller:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-seller:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-seller:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -104,6 +106,7 @@ services:
       SELLER_SIGNING_PUBLIC_KEY_PEM: ${BOOTSTRAP_SELLER_PUBLIC_KEY_PEM:-}
       SELLER_SIGNING_PRIVATE_KEY_PEM: ${BOOTSTRAP_SELLER_PRIVATE_KEY_PEM:-}
       SELLER_INBOX_POLL_INTERVAL_MS: "250"
+      SELLER_WORKER_CONCURRENCY: ${SELLER_WORKER_CONCURRENCY:-1}
     ports:
       - "8082:8082"
     depends_on:

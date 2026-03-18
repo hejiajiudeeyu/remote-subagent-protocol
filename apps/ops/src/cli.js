@@ -1,22 +1,32 @@
 #!/usr/bin/env node
+import { execFile, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import { createOpsSupervisorServer } from "./supervisor.js";
 import { ensureOpsState, ensureSellerIdentity, removeSubagent, saveOpsState, setSubagentEnabled, upsertSubagent } from "./config.js";
+import { buildExampleSubagentDefinition, LOCAL_EXAMPLE_SUBAGENT_ID } from "./example-subagent.js";
+
+const execFileAsync = promisify(execFile);
+const CLI_PATH = fileURLToPath(import.meta.url);
 
 function usage() {
   console.log(`Usage:
   croc-ops setup
   croc-ops start
   croc-ops status
+  croc-ops bootstrap [--email <email>] [--platform <url>] [--text <text>]
   croc-ops auth register --email <email> [--platform <url>]
   croc-ops enable-seller [--seller-id <id>] [--display-name <name>]
   croc-ops add-subagent --type <process|http> --subagent-id <id> [options]
+  croc-ops add-example-subagent
   croc-ops remove-subagent --subagent-id <id>
   croc-ops enable-subagent --subagent-id <id>
   croc-ops disable-subagent --subagent-id <id>
   croc-ops submit-review
+  croc-ops run-example [--text <text>]
   croc-ops doctor
   croc-ops debug-snapshot
 
@@ -58,6 +68,10 @@ function emit(value) {
   console.log(JSON.stringify(value, null, 2));
 }
 
+function logBootstrapStep(steps, step, ok, detail = {}) {
+  steps.push({ step, ok, ...detail });
+}
+
 function getValues(value) {
   if (value === undefined || value === null || value === false) {
     return [];
@@ -79,6 +93,22 @@ async function requestJson(baseUrl, pathname, { method = "GET", headers = {}, bo
     status: response.status,
     body: text ? JSON.parse(text) : null
   };
+}
+
+async function runCliSubcommand(args, env) {
+  const result = await execFileAsync(process.execPath, [CLI_PATH, ...args], { env });
+  return result.stdout.trim() ? JSON.parse(result.stdout) : {};
+}
+
+async function waitFor(check, { timeoutMs = 15000, intervalMs = 250 } = {}) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    try {
+      return await check();
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  throw new Error("timeout");
 }
 
 function buildSellerRegisterHeaders(state) {
@@ -135,6 +165,69 @@ function parseSubagentDefinition(args) {
 
 function supervisorUrlFromState(state) {
   return `http://127.0.0.1:${state.config.runtime.ports.supervisor}`;
+}
+
+async function ensureSupervisorAvailable(baseUrl, env) {
+  try {
+    const health = await requestJson(baseUrl, "/healthz");
+    if (health.status === 200) {
+      return { started: false };
+    }
+  } catch {}
+
+  const child = spawn(process.execPath, [CLI_PATH, "start"], {
+    env,
+    detached: true,
+    stdio: "ignore"
+  });
+  child.unref();
+
+  await waitFor(async () => {
+    const health = await requestJson(baseUrl, "/healthz");
+    if (health.status !== 200) {
+      throw new Error("supervisor_not_ready");
+    }
+    return health;
+  });
+  return { started: true };
+}
+
+async function maybeApproveExample({ platformUrl, adminApiKey, sellerId }) {
+  if (!adminApiKey) {
+    return { ok: false, reason: "admin_api_key_missing" };
+  }
+  const headers = { Authorization: `Bearer ${adminApiKey}` };
+  const seller = await requestJson(platformUrl, `/v1/admin/sellers/${encodeURIComponent(sellerId)}/approve`, {
+    method: "POST",
+    headers,
+    body: { reason: "ops bootstrap local demo approval" }
+  });
+  const subagent = await requestJson(platformUrl, `/v1/admin/subagents/${encodeURIComponent(LOCAL_EXAMPLE_SUBAGENT_ID)}/approve`, {
+    method: "POST",
+    headers,
+    body: { reason: "ops bootstrap local demo approval" }
+  });
+  return {
+    ok: seller.status === 200 && subagent.status === 200,
+    seller,
+    subagent
+  };
+}
+
+async function waitForCatalogVisibility(supervisorUrl, sellerId, options) {
+  return waitFor(async () => {
+    const catalog = await requestJson(
+      supervisorUrl,
+      `/catalog/subagents?subagent_id=${encodeURIComponent(LOCAL_EXAMPLE_SUBAGENT_ID)}&seller_id=${encodeURIComponent(sellerId)}`
+    );
+    const item = catalog.body?.items?.find(
+      (entry) => entry.subagent_id === LOCAL_EXAMPLE_SUBAGENT_ID && entry.seller_id === sellerId
+    );
+    if (!item) {
+      throw new Error("catalog_not_ready");
+    }
+    return item;
+  }, options);
 }
 
 async function commandSetup(args = {}) {
@@ -258,6 +351,27 @@ async function commandAddSubagent(args) {
   });
 }
 
+async function commandAddExampleSubagent() {
+  const state = ensureOpsState();
+  const definition = buildExampleSubagentDefinition();
+  upsertSubagent(state, definition);
+  state.env = saveOpsState(state);
+  try {
+    const response = await requestJson(supervisorUrlFromState(state), "/seller/subagents/example", {
+      method: "POST",
+      body: {}
+    });
+    emit(response.body);
+    return;
+  } catch {}
+  emit({
+    ok: true,
+    example: true,
+    subagent_id: definition.subagent_id,
+    adapter_type: definition.adapter_type
+  });
+}
+
 async function commandSetSubagentEnabled(args, enabled) {
   const state = ensureOpsState();
   const subagentId = String(args["subagent-id"] || "").trim();
@@ -336,7 +450,7 @@ async function commandSubmitReview(args = {}) {
   const pending = (state.config.seller.subagents || []).filter((item) => item.submitted_for_review !== true);
   const results = [];
   for (const item of pending) {
-    const response = await requestJson(state.config.platform.base_url, "/v1/sellers/register", {
+    const response = await requestJson(state.config.platform.base_url, "/v1/catalog/subagents", {
       method: "POST",
       headers: buildSellerRegisterHeaders(state),
       body: {
@@ -353,9 +467,9 @@ async function commandSubmitReview(args = {}) {
       emit(response.body);
       return;
     }
-    state.env.SELLER_PLATFORM_API_KEY = response.body.api_key;
+    state.env.SELLER_PLATFORM_API_KEY = response.body.seller_api_key || response.body.api_key;
     item.submitted_for_review = true;
-    item.review_status = response.body.review_status || "pending";
+    item.review_status = response.body.subagent_review_status || response.body.review_status || "pending";
     results.push(response.body);
   }
   state.env = saveOpsState(state);
@@ -414,6 +528,209 @@ async function commandDebugSnapshot() {
   emit(response.body);
 }
 
+async function commandRunExample(args) {
+  const state = ensureOpsState();
+  const text = String(args.text || "Summarize this local example request.").trim();
+  const response = await requestJson(supervisorUrlFromState(state), "/requests/example", {
+    method: "POST",
+    body: { text }
+  });
+  emit({
+    ok: response.status === 201,
+    ...response.body
+  });
+}
+
+async function commandBootstrap(args) {
+  const steps = [];
+  const initialState = ensureOpsState();
+  const setupArgs = ["setup"];
+  if (args["seller-id"]) {
+    setupArgs.push("--seller-id", String(args["seller-id"]));
+  }
+  if (args["display-name"]) {
+    setupArgs.push("--display-name", String(args["display-name"]));
+  }
+
+  const platformUrl = String(args.platform || initialState.config.platform.base_url || process.env.PLATFORM_API_BASE_URL || "http://127.0.0.1:8080").trim();
+  const env = { ...process.env, PLATFORM_API_BASE_URL: platformUrl };
+
+  try {
+    const setup = await runCliSubcommand(setupArgs, env);
+    logBootstrapStep(steps, "setup_ok", true, { ops_home: setup.ops_home });
+
+    let state = ensureOpsState();
+    const email =
+      String(args.email || state.config.buyer.contact_email || process.env.BOOTSTRAP_BUYER_EMAIL || "").trim() ||
+      `ops-user-${Date.now()}@local.test`;
+    if (state.config.buyer.api_key && state.config.buyer.contact_email) {
+      logBootstrapStep(steps, "buyer_registered", true, {
+        buyer_email: state.config.buyer.contact_email,
+        existing: true
+      });
+    } else {
+      const register = await runCliSubcommand(["auth", "register", "--email", email, "--platform", platformUrl], env);
+      logBootstrapStep(steps, "buyer_registered", register.ok === true, {
+        buyer_email: register.contact_email || email
+      });
+      if (register.ok !== true) {
+        emit({
+          ok: false,
+          stage: "buyer_register_failed",
+          steps,
+          response: register
+        });
+        return;
+      }
+    }
+
+    state = ensureOpsState();
+    const hasExample = (state.config.seller.subagents || []).some((item) => item.subagent_id === LOCAL_EXAMPLE_SUBAGENT_ID);
+    if (hasExample) {
+      logBootstrapStep(steps, "example_subagent_added", true, {
+        subagent_id: LOCAL_EXAMPLE_SUBAGENT_ID,
+        existing: true
+      });
+    } else {
+      const added = await runCliSubcommand(["add-example-subagent"], env);
+      logBootstrapStep(steps, "example_subagent_added", added.ok !== false, {
+        subagent_id: added.subagent_id || LOCAL_EXAMPLE_SUBAGENT_ID
+      });
+      if (added.ok === false) {
+        emit({
+          ok: false,
+          stage: "example_subagent_add_failed",
+          steps,
+          response: added
+        });
+        return;
+      }
+    }
+
+    state = ensureOpsState();
+    const example = (state.config.seller.subagents || []).find((item) => item.subagent_id === LOCAL_EXAMPLE_SUBAGENT_ID);
+    if (example?.submitted_for_review === true) {
+      logBootstrapStep(steps, "review_submitted", true, {
+        submitted: 0,
+        existing: true
+      });
+    } else {
+      const review = await runCliSubcommand(["submit-review"], env);
+      const reviewOk = review.ok === true || typeof review.submitted === "number";
+      logBootstrapStep(steps, "review_submitted", reviewOk, {
+        submitted: review.submitted || 0
+      });
+      if (!reviewOk) {
+        emit({
+          ok: false,
+          stage: "submit_review_failed",
+          steps,
+          response: review
+        });
+        return;
+      }
+    }
+
+    const enabled = await runCliSubcommand(["enable-seller"], env);
+    const sellerId = enabled.seller?.seller_id || enabled.seller_id || ensureOpsState().config.seller.seller_id;
+    logBootstrapStep(steps, "seller_enabled", enabled.ok === true, { seller_id: sellerId });
+    if (enabled.ok !== true) {
+      emit({
+        ok: false,
+        stage: "enable_seller_failed",
+        steps,
+        response: enabled
+      });
+      return;
+    }
+
+    const supervisorUrl = supervisorUrlFromState(ensureOpsState());
+    const supervisor = await ensureSupervisorAvailable(supervisorUrl, env);
+    logBootstrapStep(steps, "supervisor_started", true, supervisor);
+
+    let catalogVisible = null;
+    try {
+      catalogVisible = await waitForCatalogVisibility(supervisorUrl, sellerId, {
+        timeoutMs: 750,
+        intervalMs: 150
+      });
+    } catch {}
+
+    if (!catalogVisible) {
+      const approved = await maybeApproveExample({
+        platformUrl,
+        adminApiKey: process.env.PLATFORM_ADMIN_API_KEY || process.env.ADMIN_API_KEY || null,
+        sellerId
+      });
+      if (!approved.ok) {
+        emit({
+          ok: false,
+          stage: "awaiting_admin_approval",
+          steps,
+          seller_id: sellerId,
+          subagent_id: LOCAL_EXAMPLE_SUBAGENT_ID,
+          next_action: "Approve seller and subagent, then rerun croc-ops bootstrap or croc-ops run-example.",
+          reason: approved.reason || "approval_failed"
+        });
+        return;
+      }
+      logBootstrapStep(steps, "seller_approved", true);
+      logBootstrapStep(steps, "subagent_approved", true);
+      catalogVisible = await waitForCatalogVisibility(supervisorUrl, sellerId, {
+        timeoutMs: 15000,
+        intervalMs: 250
+      });
+    }
+    logBootstrapStep(steps, "catalog_visible", true, { subagent_id: LOCAL_EXAMPLE_SUBAGENT_ID });
+
+    const started = await requestJson(supervisorUrl, "/requests/example", {
+      method: "POST",
+      body: {
+        text: String(args.text || process.env.BOOTSTRAP_EXAMPLE_TEXT || "Summarize this bootstrap request.").trim()
+      }
+    });
+    if (started.status !== 201 || !started.body?.request_id) {
+      emit({
+        ok: false,
+        stage: "request_start_failed",
+        steps,
+        response: started.body || started
+      });
+      return;
+    }
+
+    const requestId = started.body.request_id;
+    const final = await waitFor(async () => {
+      const current = await requestJson(supervisorUrl, `/requests/${encodeURIComponent(requestId)}`);
+      if (!["SUCCEEDED", "FAILED", "UNVERIFIED", "TIMED_OUT"].includes(current.body?.status)) {
+        throw new Error("request_not_ready");
+      }
+      return current.body;
+    });
+    logBootstrapStep(steps, "request_succeeded", final.status === "SUCCEEDED", {
+      request_id: requestId,
+      status: final.status
+    });
+
+    emit({
+      ok: final.status === "SUCCEEDED",
+      request_id: requestId,
+      status: final.status,
+      seller_id: sellerId,
+      subagent_id: LOCAL_EXAMPLE_SUBAGENT_ID,
+      supervisor_url: supervisorUrl,
+      steps
+    });
+  } catch (error) {
+    emit({
+      ok: false,
+      stage: "bootstrap_failed",
+      steps,
+      error: error instanceof Error ? error.message : "unknown_error"
+    });
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args.h || args._.length === 0) {
@@ -435,12 +752,20 @@ async function main() {
     await commandStatus();
     return;
   }
+  if (group === "bootstrap") {
+    await commandBootstrap(args);
+    return;
+  }
   if (group === "enable-seller") {
     await commandEnableSeller(args);
     return;
   }
   if (group === "add-subagent") {
     await commandAddSubagent(args);
+    return;
+  }
+  if (group === "add-example-subagent") {
+    await commandAddExampleSubagent();
     return;
   }
   if (group === "enable-subagent") {
@@ -465,6 +790,10 @@ async function main() {
   }
   if (group === "submit-review") {
     await commandSubmitReview(args);
+    return;
+  }
+  if (group === "run-example") {
+    await commandRunExample(args);
     return;
   }
   if (group === "auth" && command === "register") {

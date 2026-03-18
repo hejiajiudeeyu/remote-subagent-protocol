@@ -1,6 +1,6 @@
 services:
   seller-controller:
-    image: ${IMAGE_REGISTRY:-ghcr.io/your-org}/rsp-seller:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu}/rsp-seller:${IMAGE_TAG:-latest}
     build:
       context: ../..
       dockerfile: Dockerfile.workspace
@@ -22,6 +22,7 @@ services:
       SELLER_ALLOWED_TASK_TYPES: ${SELLER_ALLOWED_TASK_TYPES:-}
       SELLER_HEARTBEAT_INTERVAL_MS: ${SELLER_HEARTBEAT_INTERVAL_MS:-30000}
       SELLER_INBOX_POLL_INTERVAL_MS: ${SELLER_INBOX_POLL_INTERVAL_MS:-250}
+      SELLER_WORKER_CONCURRENCY: ${SELLER_WORKER_CONCURRENCY:-1}
       SQLITE_DATABASE_PATH: ${SQLITE_DATABASE_PATH:-/data/seller-controller.sqlite}
     extra_hosts:
       - "host.docker.internal:host-gateway"

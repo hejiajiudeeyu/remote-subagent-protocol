@@ -5,13 +5,11 @@ It is no longer the primary install path for the end-user ops client.
 
 For end-user buyer/seller install, prefer:
 
-1. `npx @croc/ops setup`
-2. `npx @croc/ops auth register --email you@example.com --platform http://127.0.0.1:8080`
-3. `npx @croc/ops add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`
-4. `npx @croc/ops submit-review`
-5. `npx @croc/ops enable-seller`
-6. `npx @croc/ops start`
-7. `npx @croc/ops doctor` / `npx @croc/ops debug-snapshot`
+1. `npm install`
+2. `npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080`
+2. If you want a custom worker instead of the built-in example, use:
+   `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`
+3. `npm run ops -- doctor` / `npm run ops -- debug-snapshot`
 
 This path starts a local supervisor that manages relay, buyer, and optional seller together.
 Runtime logs are written to `~/.remote-subagent/logs` and can be inspected from `ops-console` or `debug-snapshot`.

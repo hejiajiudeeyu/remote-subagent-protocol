@@ -7,7 +7,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createPlatformServer, createPlatformState } from "@croc/platform-api";
-import { closeServer, listenServer } from "../helpers/http.js";
+import { createOpsSupervisorServer } from "../../apps/ops/src/supervisor.js";
+import { closeServer, jsonRequest, listenServer } from "../helpers/http.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -184,5 +185,152 @@ describe("ops cli integration", () => {
 
     const config = JSON.parse(fs.readFileSync(path.join(opsHome, "ops.config.json"), "utf8"));
     expect(config.seller.subagents.some((item) => item.subagent_id === "cli.remove.v1")).toBe(false);
+  });
+
+  it("installs the official example subagent through the cli", async () => {
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-example-"));
+    cleanupDirs.push(opsHome);
+
+    const env = {
+      ...process.env,
+      CROC_OPS_HOME: opsHome
+    };
+
+    const output = JSON.parse((await execFileAsync(process.execPath, [CLI_PATH, "add-example-subagent"], { env })).stdout);
+    const config = JSON.parse(fs.readFileSync(path.join(opsHome, "ops.config.json"), "utf8"));
+    const example = config.seller.subagents.find((item) => item.subagent_id === "local.summary.v1");
+
+    expect(output.ok).toBe(true);
+    expect(example).toBeTruthy();
+    expect(example.display_name).toBe("Local Summary Example");
+    expect(example.task_types).toEqual(["text_summarize"]);
+    expect(example.capabilities).toEqual(["text.summarize"]);
+    expect(example.tags).toEqual(["local", "example", "demo"]);
+    expect(example.adapter_type).toBe("process");
+    expect(example.adapter.cmd).toContain("example-subagent-worker.js");
+  });
+
+  it("bootstraps the local client and stops at admin approval when operator credentials are unavailable", async () => {
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-bootstrap-awaiting-"));
+    cleanupDirs.push(opsHome);
+
+    const supervisorPort = String(56000 + Math.floor(Math.random() * 500));
+    const relayPort = String(56500 + Math.floor(Math.random() * 500));
+    const buyerPort = String(57000 + Math.floor(Math.random() * 500));
+    const sellerPort = String(57500 + Math.floor(Math.random() * 500));
+
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "ops-cli-bootstrap-awaiting", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+
+    process.env.CROC_OPS_HOME = opsHome;
+    process.env.PLATFORM_API_BASE_URL = platformUrl;
+    process.env.OPS_PORT_SUPERVISOR = supervisorPort;
+    process.env.OPS_PORT_RELAY = relayPort;
+    process.env.OPS_PORT_BUYER = buyerPort;
+    process.env.OPS_PORT_SELLER = sellerPort;
+
+    const supervisor = createOpsSupervisorServer();
+    await new Promise((resolve) => supervisor.listen(Number(supervisorPort), "127.0.0.1", resolve));
+    await jsonRequest(`http://127.0.0.1:${supervisorPort}`, "/setup", { method: "POST", body: {} });
+    await supervisor.startManagedServices();
+
+    try {
+      const env = {
+        ...process.env,
+        CROC_OPS_HOME: opsHome,
+        PLATFORM_API_BASE_URL: platformUrl,
+        OPS_PORT_SUPERVISOR: supervisorPort,
+        OPS_PORT_RELAY: relayPort,
+        OPS_PORT_BUYER: buyerPort,
+        OPS_PORT_SELLER: sellerPort
+      };
+
+      const output = JSON.parse(
+        (await execFileAsync(process.execPath, [CLI_PATH, "bootstrap", "--email", "bootstrap-awaiting@test.local"], { env })).stdout
+      );
+
+      expect(output.ok).toBe(false);
+      expect(output.stage).toBe("awaiting_admin_approval");
+      expect(output.subagent_id).toBe("local.summary.v1");
+      expect(output.steps.map((item) => item.step)).toContain("review_submitted");
+      expect(output.steps.map((item) => item.step)).toContain("seller_enabled");
+    } finally {
+      await supervisor.stopManagedServices();
+      await closeServer(supervisor);
+      await closeServer(platformServer);
+      delete process.env.CROC_OPS_HOME;
+      delete process.env.PLATFORM_API_BASE_URL;
+      delete process.env.OPS_PORT_SUPERVISOR;
+      delete process.env.OPS_PORT_RELAY;
+      delete process.env.OPS_PORT_BUYER;
+      delete process.env.OPS_PORT_SELLER;
+    }
+  });
+
+  it("bootstraps the local client end-to-end when operator approval is available", async () => {
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-bootstrap-success-"));
+    cleanupDirs.push(opsHome);
+
+    const supervisorPort = String(58000 + Math.floor(Math.random() * 500));
+    const relayPort = String(58500 + Math.floor(Math.random() * 500));
+    const buyerPort = String(59000 + Math.floor(Math.random() * 500));
+    const sellerPort = String(59500 + Math.floor(Math.random() * 500));
+
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "ops-cli-bootstrap-success", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+
+    process.env.CROC_OPS_HOME = opsHome;
+    process.env.PLATFORM_API_BASE_URL = platformUrl;
+    process.env.PLATFORM_ADMIN_API_KEY = platformState.adminApiKey;
+    process.env.OPS_PORT_SUPERVISOR = supervisorPort;
+    process.env.OPS_PORT_RELAY = relayPort;
+    process.env.OPS_PORT_BUYER = buyerPort;
+    process.env.OPS_PORT_SELLER = sellerPort;
+
+    const supervisor = createOpsSupervisorServer();
+    await new Promise((resolve) => supervisor.listen(Number(supervisorPort), "127.0.0.1", resolve));
+    await jsonRequest(`http://127.0.0.1:${supervisorPort}`, "/setup", { method: "POST", body: {} });
+    await supervisor.startManagedServices();
+
+    try {
+      const env = {
+        ...process.env,
+        CROC_OPS_HOME: opsHome,
+        PLATFORM_API_BASE_URL: platformUrl,
+        PLATFORM_ADMIN_API_KEY: platformState.adminApiKey,
+        OPS_PORT_SUPERVISOR: supervisorPort,
+        OPS_PORT_RELAY: relayPort,
+        OPS_PORT_BUYER: buyerPort,
+        OPS_PORT_SELLER: sellerPort
+      };
+
+      const output = JSON.parse(
+        (
+          await execFileAsync(
+            process.execPath,
+            [CLI_PATH, "bootstrap", "--email", "bootstrap-success@test.local", "--text", "Summarize this bootstrap request."],
+            { env }
+          )
+        ).stdout
+      );
+
+      expect(output.ok).toBe(true);
+      expect(output.status).toBe("SUCCEEDED");
+      expect(output.subagent_id).toBe("local.summary.v1");
+      expect(output.steps.find((item) => item.step === "request_succeeded")?.ok).toBe(true);
+    } finally {
+      await supervisor.stopManagedServices();
+      await closeServer(supervisor);
+      await closeServer(platformServer);
+      delete process.env.CROC_OPS_HOME;
+      delete process.env.PLATFORM_API_BASE_URL;
+      delete process.env.PLATFORM_ADMIN_API_KEY;
+      delete process.env.OPS_PORT_SUPERVISOR;
+      delete process.env.OPS_PORT_RELAY;
+      delete process.env.OPS_PORT_BUYER;
+      delete process.env.OPS_PORT_SELLER;
+    }
   });
 });

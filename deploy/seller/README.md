@@ -5,12 +5,13 @@ It is not the default install path for end-user seller setup on a personal compu
 
 For end-user seller install, prefer the CLI path:
 
-1. `npx @croc/ops setup`
-2. `npx @croc/ops auth register --email you@example.com --platform http://127.0.0.1:8080`
-3. `npx @croc/ops add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`
-4. `npx @croc/ops submit-review`
-5. `npx @croc/ops enable-seller`
-6. `npx @croc/ops start`
+1. `npm install`
+2. `npm run ops -- setup`
+3. `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080`
+4. `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`
+5. `npm run ops -- submit-review`
+6. `npm run ops -- enable-seller`
+7. `npm run ops -- start`
 
 ## Standalone Docker Profile
 
@@ -19,6 +20,7 @@ This profile requires an external relay service; see `deploy/relay` for the comp
 
 1. `cp .env.example .env`
 2. Set `PLATFORM_API_BASE_URL`, `PLATFORM_API_KEY`, `TRANSPORT_BASE_URL`, `SELLER_ID`, and `SUBAGENT_IDS`
+   - set `SELLER_WORKER_CONCURRENCY` above `1` only when the attached executor and transport path are ready for parallel task execution
 3. `docker compose up -d --build`
 4. Check `http://127.0.0.1:${PORT:-8082}/healthz`
 

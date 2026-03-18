@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { createBuyerControllerServer } from "@croc/buyer-controller";
 import { createBuyerControllerServer as createBuyerControllerCoreServer } from "@croc/buyer-controller-core";
@@ -733,6 +733,15 @@ describe("buyer-controller integration", () => {
     });
     expect(approved.status).toBe(200);
 
+    const approveSeller = await jsonRequest(platformUrl, "/v1/admin/sellers/seller_legalworks/approve", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${platformState.adminApiKey}`
+      },
+      body: { reason: "seller ready for discovery" }
+    });
+    expect(approveSeller.status).toBe(200);
+
     const buyerServer = createBuyerControllerCoreServer({
       serviceName: "buyer-controller-capability-test",
       platform: {
@@ -1257,5 +1266,120 @@ describe("buyer-controller integration", () => {
     expect(result.status).toBe(200);
     expect(result.body.status).toBe("UNVERIFIED");
     expect(result.body.last_error_code).toBe("RESULT_CONTEXT_MISMATCH");
+  });
+
+  it("uses batched platform event sync for active background requests", async () => {
+    const platformState = createPlatformState();
+    const platformServer = createPlatformServer({ serviceName: "platform-buyer-batch-sync-test", state: platformState });
+    const platformUrl = await listenServer(platformServer);
+    const buyer = await jsonRequest(platformUrl, "/v1/users/register", {
+      method: "POST",
+      body: { contact_email: "buyer-batch-sync@test.local" }
+    });
+    const seller = platformState.bootstrap.sellers[0];
+    const originalFetch = global.fetch;
+    let batchCalls = 0;
+
+    global.fetch = vi.fn(async (input, init) => {
+      const target = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new URL(target);
+      if (url.origin === new URL(platformUrl).origin && url.pathname === "/v1/requests/events/batch") {
+        batchCalls += 1;
+      }
+      return originalFetch(input, init);
+    });
+
+    const buyerServer = createBuyerControllerCoreServer({
+      serviceName: "buyer-controller-batch-sync-test",
+      platform: {
+        baseUrl: platformUrl,
+        apiKey: buyer.body.api_key
+      },
+      background: {
+        enabled: true,
+        eventsSyncIntervalMs: 25
+      }
+    });
+    const buyerUrl = await listenServer(buyerServer);
+
+    try {
+      for (const requestId of ["req_buyer_batch_sync_1", "req_buyer_batch_sync_2"]) {
+        const created = await jsonRequest(buyerUrl, "/controller/requests", {
+          method: "POST",
+          body: {
+            request_id: requestId,
+            seller_id: seller.seller_id,
+            subagent_id: seller.subagent_id,
+            soft_timeout_s: 20,
+            hard_timeout_s: 40
+          }
+        });
+        expect(created.status).toBe(201);
+
+        const markedSent = await jsonRequest(buyerUrl, `/controller/requests/${requestId}/mark-sent`, {
+          method: "POST"
+        });
+        expect(markedSent.status).toBe(200);
+
+        const issued = await jsonRequest(platformUrl, "/v1/tokens/task", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${buyer.body.api_key}`
+          },
+          body: {
+            request_id: requestId,
+            seller_id: seller.seller_id,
+            subagent_id: seller.subagent_id
+          }
+        });
+        expect(issued.status).toBe(201);
+
+        const acked = await jsonRequest(platformUrl, `/v1/requests/${requestId}/ack`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${seller.api_key}`
+          },
+          body: {
+            seller_id: seller.seller_id,
+            subagent_id: seller.subagent_id,
+            eta_hint_s: 3
+          }
+        });
+        expect(acked.status).toBe(202);
+      }
+
+      const completed = await jsonRequest(platformUrl, "/v1/requests/req_buyer_batch_sync_1/events", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${seller.api_key}`
+        },
+        body: {
+          seller_id: seller.seller_id,
+          subagent_id: seller.subagent_id,
+          event_type: "COMPLETED",
+          status: "ok",
+          finished_at: "2026-03-18T12:00:00.000Z"
+        }
+      });
+      expect(completed.status).toBe(202);
+
+      await waitFor(async () => {
+        const first = await jsonRequest(buyerUrl, "/controller/requests/req_buyer_batch_sync_1");
+        const second = await jsonRequest(buyerUrl, "/controller/requests/req_buyer_batch_sync_2");
+        if (first.body.status !== "ACKED" || second.body.status !== "ACKED") {
+          throw new Error("ack_sync_pending");
+        }
+        if (!first.body.platform_completed_at) {
+          throw new Error("completion_sync_pending");
+        }
+        return { first, second };
+      });
+
+      expect(batchCalls).toBeGreaterThan(0);
+    } finally {
+      global.fetch = originalFetch;
+      await closeServer(buyerServer);
+      await closeServer(platformServer);
+    }
   });
 });

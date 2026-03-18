@@ -5,7 +5,7 @@ const rootDir = process.cwd();
 const packageJson = JSON.parse(fs.readFileSync(path.join(rootDir, "package.json"), "utf8"));
 const version = packageJson.version;
 const tag = `v${version}`;
-const releasesDir = path.join(rootDir, "docs", "releases");
+const releasesDir = path.join(rootDir, "docs", "archive", "releases");
 const notesFile = path.join(releasesDir, `${tag}.md`);
 const matrixFile = path.join(releasesDir, "compatibility-matrix.md");
 
