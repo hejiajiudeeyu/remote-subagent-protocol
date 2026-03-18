@@ -21,6 +21,8 @@
     "@croc/transport-relay-http"
   ],
   "scripts": {
+    "prepack": "node ../../scripts/bundle-workspace-deps.mjs stage",
+    "postpack": "node ../../scripts/bundle-workspace-deps.mjs cleanup",
     "start": "node src/cli.js"
   },
   "dependencies": {

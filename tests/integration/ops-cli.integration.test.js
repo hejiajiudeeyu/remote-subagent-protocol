@@ -333,4 +333,44 @@ describe("ops cli integration", () => {
       delete process.env.OPS_PORT_SELLER;
     }
   });
+  it("packs into a clean-room installable cli tarball", async () => {
+    const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-pack-"));
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-clean-room-"));
+    cleanupDirs.push(packDir);
+    cleanupDirs.push(installDir);
+
+    const packed = await execFileAsync("npm", ["pack", "--workspace", "@croc/ops"], {
+      cwd: process.cwd(),
+      env: process.env
+    });
+    const tarballName = packed.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .pop();
+    const tarballPath = path.join(process.cwd(), tarballName);
+    const copiedTarballPath = path.join(packDir, tarballName);
+    fs.copyFileSync(tarballPath, copiedTarballPath);
+    fs.rmSync(tarballPath, { force: true });
+
+    await execFileAsync("npm", ["init", "-y"], {
+      cwd: installDir,
+      env: process.env
+    });
+    await execFileAsync("npm", ["install", copiedTarballPath], {
+      cwd: installDir,
+      env: process.env
+    });
+
+    const doctor = await execFileAsync(path.join(installDir, "node_modules/.bin/croc-ops"), ["doctor"], {
+      cwd: installDir,
+      env: {
+        ...process.env,
+        CROC_OPS_HOME: path.join(installDir, ".ops-home")
+      }
+    });
+    const output = JSON.parse(doctor.stdout);
+    expect(output.config.platform.base_url).toBe("http://127.0.0.1:8080");
+    expect(output.config.seller.seller_id).toBe("seller_cli_test");
+  });
 });
