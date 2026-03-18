@@ -5,4 +5,4 @@ export {
   replaceSecretStore,
   writeSecretValues,
   rotateSecretStorePassphrase
-} from "@croc/runtime-utils";
+} from "@delexec/runtime-utils";

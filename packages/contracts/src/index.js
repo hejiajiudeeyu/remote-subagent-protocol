@@ -1,3 +1,14 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PACKAGE_ROOT = path.resolve(__dirname, '..');
+const BUNDLED_TEMPLATES_ROOT = path.join(PACKAGE_ROOT, 'templates');
+const BUNDLED_PROTOCOL_DOCS_ROOT = path.join(PACKAGE_ROOT, 'protocol-docs');
+const BUNDLED_TEMPLATE_MANIFEST_PATH = path.join(BUNDLED_TEMPLATES_ROOT, 'manifest.json');
+
 export const REQUEST_STATUS = {
   CREATED: 'CREATED',
   SENT: 'SENT',
@@ -209,4 +220,31 @@ export function canonicalizeResultPackageForSignature(result = {}) {
   }
 
   return canonical;
+}
+
+export function getBundledTemplatesRoot() {
+  return BUNDLED_TEMPLATES_ROOT;
+}
+
+export function getBundledProtocolDocsRoot() {
+  return BUNDLED_PROTOCOL_DOCS_ROOT;
+}
+
+export function hasBundledProtocolAssets() {
+  return fs.existsSync(BUNDLED_TEMPLATE_MANIFEST_PATH);
+}
+
+export function loadBundledTemplateManifest() {
+  if (!hasBundledProtocolAssets()) {
+    throw new Error('contracts_bundled_assets_missing');
+  }
+  return JSON.parse(fs.readFileSync(BUNDLED_TEMPLATE_MANIFEST_PATH, 'utf8'));
+}
+
+export function resolveBundledTemplatePath(relativePath = '') {
+  return path.join(BUNDLED_TEMPLATES_ROOT, relativePath);
+}
+
+export function resolveBundledProtocolDocPath(relativePath = '') {
+  return path.join(BUNDLED_PROTOCOL_DOCS_ROOT, relativePath);
 }

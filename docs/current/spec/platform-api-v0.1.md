@@ -62,7 +62,7 @@
 - `RESULT_NOT_READY`：`true`（结果尚未就绪，可稍后重试）
 
 实现口径：
-- 中心错误码注册表位于 `@croc/contracts`，服务端结构化错误响应默认以该注册表为准推导 `retryable`。
+- 中心错误码注册表位于 `@delexec/contracts`，服务端结构化错误响应默认以该注册表为准推导 `retryable`。
 - 新增标准错误码时，应先更新中心注册表，再补服务逻辑与文档。
 
 附加字段可出现在 `error` 对象同级，例如：
@@ -337,7 +337,7 @@ L0 最小要求：
 {
   "task_token": "<JWT_OR_EQUIVALENT>",
   "claims": {
-    "iss": "croc-platform-api",
+    "iss": "delexec-platform-api",
     "aud": "seller_foxlab",
     "sub": "buyer_acme",
     "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",
@@ -367,7 +367,7 @@ L0 最小要求：
 {
   "active": true,
   "claims": {
-    "iss": "croc-platform-api",
+    "iss": "delexec-platform-api",
     "aud": "seller_foxlab",
     "sub": "buyer_acme",
     "request_id": "018f9d5e-8bb2-7bc1-a4a3-1a8d9d8a2f41",

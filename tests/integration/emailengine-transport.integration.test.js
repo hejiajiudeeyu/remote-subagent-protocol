@@ -2,7 +2,7 @@ import http from "node:http";
 
 import { describe, expect, it } from "vitest";
 
-import { createEmailEngineTransportAdapter } from "@croc/transport-emailengine";
+import { createEmailEngineTransportAdapter } from "@delexec/transport-emailengine";
 import { closeServer, listenServer } from "../helpers/http.js";
 
 describe("emailengine transport integration", () => {

@@ -3,17 +3,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runCase } from "../helpers/case-runner.js";
 import { jsonRequest, waitFor } from "../helpers/http.js";
 import { recordFlowIssue } from "../helpers/flow-step.js";
-import { startSystem, stopSystem } from "./system.js";
+import { startHttpProcessSystem, stopHttpProcessSystem } from "./http-process-system.js";
 
 describe("e2e: invalid result package", () => {
   let system;
 
   beforeAll(async () => {
-    system = await startSystem();
+    system = await startHttpProcessSystem();
   });
 
   afterAll(async () => {
-    await stopSystem(system);
+    await stopHttpProcessSystem(system);
   });
 
   it("marks request as UNVERIFIED when schema check fails", async () => {
@@ -24,19 +24,19 @@ describe("e2e: invalid result package", () => {
       run: async () => {
         const requestId = `req_result_invalid_${Date.now()}`;
 
-        await jsonRequest(system.buyerUrl, "/controller/requests", {
+        await jsonRequest(system.buyer.baseUrl, "/controller/requests", {
           method: "POST",
           body: {
             request_id: requestId,
-            seller_id: system.bootstrapSeller.seller_id,
-            subagent_id: system.bootstrapSeller.subagent_id,
-            expected_signer_public_key_pem: system.bootstrapSeller.signing.publicKeyPem,
+            seller_id: system.sellerId,
+            subagent_id: system.subagentId,
+            expected_signer_public_key_pem: system.signing.publicKeyPem,
             soft_timeout_s: 5,
             hard_timeout_s: 10
           }
         });
 
-        const task = await jsonRequest(system.sellerUrl, "/controller/tasks", {
+        const task = await jsonRequest(system.seller.baseUrl, "/controller/tasks", {
           method: "POST",
           body: {
             request_id: requestId,
@@ -46,19 +46,19 @@ describe("e2e: invalid result package", () => {
         });
 
         const result = await waitFor(async () => {
-          const polled = await jsonRequest(system.sellerUrl, `/controller/tasks/${task.body.task_id}/result`);
+          const polled = await jsonRequest(system.seller.baseUrl, `/controller/tasks/${task.body.task_id}/result`);
           if (polled.status !== 200 || polled.body.available !== true) {
             throw new Error("result_not_ready");
           }
           return polled;
         });
 
-        await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}/result`, {
+        await jsonRequest(system.buyer.baseUrl, `/controller/requests/${requestId}/result`, {
           method: "POST",
           body: result.body.result_package
         });
 
-        const final = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
+        const final = await jsonRequest(system.buyer.baseUrl, `/controller/requests/${requestId}`);
         expect(final.body.status).toBe("UNVERIFIED");
         expect(final.body.last_error_code).toBe("RESULT_SCHEMA_INVALID");
 

@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
-import { createPostgresSnapshotStore } from "@croc/postgres-store";
-import { createSqliteSnapshotStore } from "@croc/sqlite-store";
-import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@delexec/contracts";
+import { createPostgresSnapshotStore } from "@delexec/postgres-store";
+import { createSqliteSnapshotStore } from "@delexec/sqlite-store";
+import { createRelayHttpTransportAdapter } from "@delexec/transport-relay-http";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@delexec/runtime-utils";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -1073,7 +1074,7 @@ function createTaskClaims(state, {
   const issuedAt = Math.floor(Date.now() / 1000);
   const tokenTtlSeconds = Number(process.env.TOKEN_TTL_SECONDS || state.tokenTtlSeconds);
   const claims = {
-    iss: "croc-platform-api",
+    iss: "delexec-platform-api",
     sub: buyerId,
     aud: sellerId,
     jti: randomId("tok"),
@@ -2822,7 +2823,7 @@ function isDirectRun() {
   if (!process.argv[1]) {
     return false;
   }
-  return path.resolve(process.argv[1]) === __filename;
+  return fs.realpathSync.native(path.resolve(process.argv[1])) === fs.realpathSync.native(__filename);
 }
 
 async function createOptionalPersistence(serviceName) {

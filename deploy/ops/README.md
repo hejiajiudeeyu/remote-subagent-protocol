@@ -11,9 +11,14 @@ For end-user buyer/seller install, prefer:
    `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`
 3. `npm run ops -- doctor` / `npm run ops -- debug-snapshot`
 
-This path starts a local supervisor that manages relay, buyer, and optional seller together.
-Runtime logs are written to `~/.remote-subagent/logs` and can be inspected from `ops-console` or `debug-snapshot`.
+This path starts a local supervisor that manages buyer and optional seller together, and in local transport mode it launches relay as a separate process instead of importing relay source directly.
+Runtime logs are written to `~/.delexec/logs` and can be inspected from `ops-console` or `debug-snapshot`.
 `ops-console` now provides a setup wizard for the local buyer/seller onboarding flow, so end users do not need to memorize the full step order.
+
+Relay launch note:
+- `ops` prefers an external relay process boundary now
+- set `OPS_RELAY_BIN` and optional `OPS_RELAY_ARGS` when you want the supervisor to launch a custom relay command
+- when runtime transport is `relay_http`, the supervisor uses the configured remote relay endpoint and does not need to manage a local relay process
 
 Compose profile behavior:
 - `buyer-controller` is always on
@@ -30,7 +35,7 @@ The following steps apply only to the compose profile under `deploy/ops`.
 Compose API key bootstrap:
 1. Start `platform-api`
 2. Run `npm run ops:auth -- register --email you@example.com --platform http://127.0.0.1:8080`
-3. The command writes `~/.remote-subagent/.env.local` with:
+3. The command writes `~/.delexec/.env.local` with:
    - `PLATFORM_API_BASE_URL`
    - `BUYER_PLATFORM_API_KEY`
    - `PLATFORM_API_KEY`

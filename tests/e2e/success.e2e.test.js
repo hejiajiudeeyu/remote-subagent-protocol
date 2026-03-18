@@ -2,17 +2,17 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { runCase } from "../helpers/case-runner.js";
 import { jsonRequest, waitFor } from "../helpers/http.js";
-import { startSystem, stopSystem } from "./system.js";
+import { startHttpProcessSystem, stopHttpProcessSystem } from "./http-process-system.js";
 
 describe("e2e: success path", () => {
   let system;
 
   beforeAll(async () => {
-    system = await startSystem();
+    system = await startHttpProcessSystem();
   });
 
   afterAll(async () => {
-    await stopSystem(system);
+    await stopHttpProcessSystem(system);
   });
 
   it("completes request with SUCCEEDED status", async () => {
@@ -23,7 +23,7 @@ describe("e2e: success path", () => {
       run: async () => {
         const requestId = `req_success_${Date.now()}`;
 
-        const registered = await jsonRequest(system.buyerUrl, "/controller/register", {
+        const registered = await jsonRequest(system.buyer.baseUrl, "/controller/register", {
           method: "POST",
           body: { contact_email: "e2e-success@test.local" }
         });
@@ -31,22 +31,27 @@ describe("e2e: success path", () => {
 
         const authHeader = { "X-Platform-Api-Key": registered.body.api_key };
 
-        const catalog = await jsonRequest(system.buyerUrl, "/controller/catalog/subagents?status=enabled", {
-          headers: authHeader
+        const catalog = await waitFor(async () => {
+          const current = await jsonRequest(system.buyer.baseUrl, "/controller/catalog/subagents?status=enabled", {
+            headers: authHeader
+          });
+          const item = current.body?.items?.find(
+            (entry) => entry.seller_id === system.sellerId && entry.subagent_id === system.subagentId
+          );
+          if (!item) {
+            throw new Error("bootstrap_catalog_item_not_ready");
+          }
+          return item;
         });
-        expect(catalog.status).toBe(200);
-        expect(catalog.body.items.length).toBeGreaterThan(0);
 
-        const selected = catalog.body.items[0];
-
-        const started = await jsonRequest(system.buyerUrl, "/controller/remote-requests", {
+        const started = await jsonRequest(system.buyer.baseUrl, "/controller/remote-requests", {
           method: "POST",
           headers: authHeader,
           body: {
             request_id: requestId,
-            seller_id: selected.seller_id,
-            subagent_id: selected.subagent_id,
-            expected_signer_public_key_pem: selected.seller_public_key_pem,
+            seller_id: catalog.seller_id,
+            subagent_id: catalog.subagent_id,
+            expected_signer_public_key_pem: catalog.seller_public_key_pem,
             simulate: "success",
             delay_ms: 30,
             soft_timeout_s: 5,
@@ -56,7 +61,7 @@ describe("e2e: success path", () => {
         expect(started.status).toBe(201);
 
         await waitFor(async () => {
-          const current = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
+          const current = await jsonRequest(system.buyer.baseUrl, `/controller/requests/${requestId}`);
           if (current.body.status !== "ACKED" && current.body.status !== "SUCCEEDED") {
             throw new Error("ack_not_ready");
           }
@@ -64,7 +69,7 @@ describe("e2e: success path", () => {
         });
 
         const final = await waitFor(async () => {
-          const current = await jsonRequest(system.buyerUrl, `/controller/requests/${requestId}`);
+          const current = await jsonRequest(system.buyer.baseUrl, `/controller/requests/${requestId}`);
           if (current.body.status !== "SUCCEEDED") {
             throw new Error("result_not_ready");
           }

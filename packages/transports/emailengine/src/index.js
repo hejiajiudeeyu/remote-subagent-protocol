@@ -3,7 +3,7 @@ import {
   buildRspHeaders,
   isRspEmailSubject,
   normalizeEnvelope
-} from "@croc/transport-email";
+} from "@delexec/transport-email";
 
 function base64ToUtf8(value) {
   return Buffer.from(value || "", "base64").toString("utf8");

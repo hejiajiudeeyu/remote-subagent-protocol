@@ -31,7 +31,7 @@
 ## 2.1 启动前准备
 - 先完成用户注册（`POST /v1/users/register`）并领取 API Key（默认 `buyer` scope）。
 - 配置平台 base URL 与认证信息（仅控制面 API）。
-- 当前本地参考实现中，`ops-console` 通过本地 passphrase 解锁 `~/.remote-subagent/secrets.enc.json`；Buyer API key、seller key、transport secrets 不再默认写入浏览器存储。
+- 当前本地参考实现中，`ops-console` 通过本地 passphrase 解锁 `~/.delexec/secrets.enc.json`；Buyer API key、seller key、transport secrets 不再默认写入浏览器存储。
 - 配置所选 `Transport Adapter` 能力（当前为 `L0 local transport`；已实现的外部模式为 `relay_http`、`emailengine`、`gmail`）。
 - 维护本地状态表（可 SQLite）：
   - 主键：`request_id`
@@ -231,7 +231,7 @@
 - token 过期：`AUTH_TOKEN_EXPIRED`
 - 任务类型不支持：当前实现为 `CONTRACT_TASK_TYPE_UNSUPPORTED`
 - 执行超时/执行器异常：使用 `EXEC_*` 域错误码
-- 具体错误码与默认 `retryable` 语义以 `@croc/contracts` 中的中心注册表为准
+- 具体错误码与默认 `retryable` 语义以 `@delexec/contracts` 中的中心注册表为准
 
 ## 3.5 卖家指标上报
 - 建议上报事件：

@@ -1,11 +1,26 @@
 {
-  "name": "@croc/transport-gmail",
+  "name": "@delexec/transport-gmail",
   "version": "0.1.0",
-  "private": true,
+  "description": "Gmail transport adapter for delegated execution",
   "type": "module",
   "main": "src/index.js",
-  "exports": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "delegated-execution",
+    "transport",
+    "gmail"
+  ],
   "dependencies": {
-    "@croc/transport-email": "0.1.0"
+    "@delexec/transport-email": "0.1.0"
   }
 }

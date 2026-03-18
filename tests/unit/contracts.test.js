@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeResultPackageForSignature, ERROR_DOMAIN, REQUEST_STATUS } from "@croc/contracts";
+import { canonicalizeResultPackageForSignature, ERROR_DOMAIN, REQUEST_STATUS } from "@delexec/contracts";
 
-describe("@croc/contracts", () => {
+describe("@delexec/contracts", () => {
   it("contains MVP request statuses", () => {
     expect(REQUEST_STATUS).toMatchObject({
       CREATED: "CREATED",

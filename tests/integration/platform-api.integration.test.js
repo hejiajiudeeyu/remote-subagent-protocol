@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
-import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
-import { createRelayServer } from "@croc/transport-relay";
-import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
+import { createSellerControllerServer, createSellerState } from "@delexec/seller-controller";
+import { createRelayServer } from "@delexec/transport-relay";
+import { createRelayHttpTransportAdapter } from "@delexec/transport-relay-http";
 import { closeServer, jsonRequest, listenServer } from "../helpers/http.js";
 
 describe("platform-api integration", () => {

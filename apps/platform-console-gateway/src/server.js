@@ -4,7 +4,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildStructuredError } from "@croc/contracts";
+import { buildStructuredError } from "@delexec/contracts";
 import {
   OPS_SECRET_KEYS,
   ensureOpsState,
@@ -15,7 +15,7 @@ import {
   unlockOpsSecrets,
   writeOpsSecrets
 } from "../../ops/src/config.js";
-import { initializeSecretStore, rotateSecretStorePassphrase } from "@croc/runtime-utils";
+import { initializeSecretStore, rotateSecretStorePassphrase } from "@delexec/runtime-utils";
 
 const SESSION_HEADER = "x-platform-console-session";
 const BOOTSTRAP_SECRET_HEADER = "x-platform-console-bootstrap-secret";

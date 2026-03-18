@@ -13,7 +13,7 @@ import {
   updateEnvFile,
   writeJsonFile,
   writeSecretValues
-} from "@croc/runtime-utils";
+} from "@delexec/runtime-utils";
 
 export const DEFAULT_PORTS = Object.freeze({
   supervisor: 8079,

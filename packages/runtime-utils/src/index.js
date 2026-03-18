@@ -5,6 +5,12 @@ import crypto from "node:crypto";
 
 const SECRET_STORE_VERSION = 1;
 const KEY_LENGTH = 32;
+const LEGACY_OPS_HOME_ENV = "CROC_OPS_HOME";
+const OPS_HOME_ENV = "DELEXEC_HOME";
+const LEGACY_OPS_HOME_BASENAME = ".remote-subagent";
+const OPS_HOME_BASENAME = ".delexec";
+const LEGACY_SQLITE_FILENAME = "croc.sqlite";
+const OPS_SQLITE_FILENAME = "delexec.sqlite";
 
 function stripWrappingQuotes(value) {
   if ((value.startsWith("\"") && value.endsWith("\"")) || (value.startsWith("'") && value.endsWith("'"))) {
@@ -37,6 +43,62 @@ function writeSecureTextFile(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, content, { encoding: "utf8", mode: 0o600 });
   fs.chmodSync(filePath, 0o600);
+}
+
+function resolveDefaultOpsHomeDir() {
+  return path.join(os.homedir(), OPS_HOME_BASENAME);
+}
+
+function resolveLegacyOpsHomeDir() {
+  return path.join(os.homedir(), LEGACY_OPS_HOME_BASENAME);
+}
+
+function renameOrCopyDir(sourceDir, targetDir) {
+  try {
+    fs.renameSync(sourceDir, targetDir);
+    return;
+  } catch (error) {
+    if (!error || (error.code !== "EXDEV" && error.code !== "EACCES" && error.code !== "EPERM")) {
+      throw error;
+    }
+  }
+  fs.cpSync(sourceDir, targetDir, { recursive: true, force: false });
+  fs.rmSync(sourceDir, { recursive: true, force: true });
+}
+
+function migrateLegacySqliteFile(homeDir) {
+  const legacyFile = path.join(homeDir, LEGACY_SQLITE_FILENAME);
+  const nextFile = path.join(homeDir, OPS_SQLITE_FILENAME);
+  if (!fs.existsSync(legacyFile) || fs.existsSync(nextFile)) {
+    return;
+  }
+  fs.renameSync(legacyFile, nextFile);
+}
+
+export function migrateLegacyOpsHomeDir({
+  explicitHomeDir = process.env[OPS_HOME_ENV] || process.env[LEGACY_OPS_HOME_ENV] || null
+} = {}) {
+  if (explicitHomeDir) {
+    const resolved = path.resolve(explicitHomeDir);
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      migrateLegacySqliteFile(resolved);
+    }
+    return resolved;
+  }
+
+  const nextHomeDir = path.resolve(resolveDefaultOpsHomeDir());
+  const legacyHomeDir = path.resolve(resolveLegacyOpsHomeDir());
+  if (!fs.existsSync(legacyHomeDir) || fs.existsSync(nextHomeDir)) {
+    if (fs.existsSync(nextHomeDir) && fs.statSync(nextHomeDir).isDirectory()) {
+      migrateLegacySqliteFile(nextHomeDir);
+    }
+    return nextHomeDir;
+  }
+
+  fs.mkdirSync(path.dirname(nextHomeDir), { recursive: true, mode: 0o700 });
+  renameOrCopyDir(legacyHomeDir, nextHomeDir);
+  migrateLegacySqliteFile(nextHomeDir);
+  return nextHomeDir;
 }
 
 function buildSecretPayload(secrets) {
@@ -149,7 +211,13 @@ export function updateEnvFile(filePath, updates, options = {}) {
 }
 
 export function getOpsHomeDir() {
-  return path.resolve(process.env.CROC_OPS_HOME || path.join(os.homedir(), ".remote-subagent"));
+  if (process.env[OPS_HOME_ENV]) {
+    return path.resolve(process.env[OPS_HOME_ENV]);
+  }
+  if (process.env[LEGACY_OPS_HOME_ENV]) {
+    return path.resolve(process.env[LEGACY_OPS_HOME_ENV]);
+  }
+  return migrateLegacyOpsHomeDir();
 }
 
 export function getOpsEnvFile() {
@@ -173,6 +241,7 @@ export function ensureOpsDirectories() {
   fs.mkdirSync(homeDir, { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(homeDir, "logs"), { recursive: true, mode: 0o700 });
   fs.mkdirSync(path.join(homeDir, "run"), { recursive: true, mode: 0o700 });
+  migrateLegacySqliteFile(homeDir);
   return homeDir;
 }
 

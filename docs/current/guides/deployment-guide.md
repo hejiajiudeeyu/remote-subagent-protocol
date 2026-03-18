@@ -51,10 +51,10 @@ Manual fallback path:
 7. `npm run ops -- start`
 8. `npm run ops -- run-example --text "Summarize this request."`
 
-This path stores local ops state under `~/.remote-subagent`, starts a local supervisor, and manages relay internally.
-Local runtime logs are written under `~/.remote-subagent/logs`, and `ops-console` reads logs and debug snapshot data from the supervisor.
+This path stores local ops state under `~/.delexec`, starts a local supervisor, and manages relay internally.
+Local runtime logs are written under `~/.delexec/logs`, and `ops-console` reads logs and debug snapshot data from the supervisor.
 `ops-console` also provides a setup wizard that guides the user through buyer registration, official example installation, review submission, seller enablement, and local example self-call.
-`ops-console` now also supports a local passphrase-backed unlock flow. Sensitive local credentials are stored in `~/.remote-subagent/secrets.enc.json` rather than browser storage.
+`ops-console` now also supports a local passphrase-backed unlock flow. Sensitive local credentials are stored in `~/.delexec/secrets.enc.json` rather than browser storage.
 `enable-seller` only enables the local seller runtime. Platform review controls catalog visibility and remote availability; it does not prevent the local runtime from starting.
 
 For coding-agent oriented setup and machine-readable bootstrap output, see:
@@ -169,16 +169,16 @@ Current implementation scope:
 - polling-based inbox consumption
 - signed JSON payload in message body
 - artifacts as email attachments
-- secrets stored in local encrypted `~/.remote-subagent/secrets.enc.json` when using the console session flow
+- secrets stored in local encrypted `~/.delexec/secrets.enc.json` when using the console session flow
 - legacy `.env.local` fallback remains for CLI-only/bootstrap compatibility until migrated
 
 ## Local Secret Storage
 
 Current local file layout for the end-user install path:
 
-- `~/.remote-subagent/ops.config.json`: non-sensitive local runtime config
-- `~/.remote-subagent/.env.local`: compatibility env file, progressively de-sensitive
-- `~/.remote-subagent/secrets.enc.json`: encrypted secret store unlocked by a local passphrase
+- `~/.delexec/ops.config.json`: non-sensitive local runtime config
+- `~/.delexec/.env.local`: compatibility env file, progressively de-sensitive
+- `~/.delexec/secrets.enc.json`: encrypted secret store unlocked by a local passphrase
 
 Current implementation uses:
 

@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
 import { createOpsSupervisorServer } from "../../apps/ops/src/supervisor.js";
 import { closeServer, jsonRequest, listenServer } from "../helpers/http.js";
 
@@ -25,12 +25,12 @@ describe("ops cli integration", () => {
   });
 
   it("initializes ops config idempotently and adds process/http subagents", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-home-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-home-"));
     cleanupDirs.push(opsHome);
 
     const env = {
       ...process.env,
-      CROC_OPS_HOME: opsHome
+      DELEXEC_HOME: opsHome
     };
 
     await execFileAsync(process.execPath, [CLI_PATH, "seller", "init", "--seller-id", "seller_cli_test"], { env });
@@ -83,7 +83,7 @@ describe("ops cli integration", () => {
   });
 
   it("submits pending subagents explicitly and persists seller api key", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-register-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-register-"));
     cleanupDirs.push(opsHome);
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "ops-cli-platform", state: platformState });
@@ -92,7 +92,7 @@ describe("ops cli integration", () => {
     try {
       const env = {
         ...process.env,
-        CROC_OPS_HOME: opsHome
+        DELEXEC_HOME: opsHome
       };
 
       const auth = JSON.parse(
@@ -142,12 +142,12 @@ describe("ops cli integration", () => {
   });
 
   it("toggles local subagent enabled state through the cli", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-toggle-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-toggle-"));
     cleanupDirs.push(opsHome);
 
     const env = {
       ...process.env,
-      CROC_OPS_HOME: opsHome
+      DELEXEC_HOME: opsHome
     };
 
     await execFileAsync(process.execPath, [CLI_PATH, "setup", "--seller-id", "seller_cli_toggle"], { env });
@@ -167,12 +167,12 @@ describe("ops cli integration", () => {
   });
 
   it("removes a local subagent through the cli", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-remove-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-remove-"));
     cleanupDirs.push(opsHome);
 
     const env = {
       ...process.env,
-      CROC_OPS_HOME: opsHome
+      DELEXEC_HOME: opsHome
     };
 
     await execFileAsync(process.execPath, [CLI_PATH, "setup", "--seller-id", "seller_cli_remove"], { env });
@@ -188,12 +188,12 @@ describe("ops cli integration", () => {
   });
 
   it("installs the official example subagent through the cli", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-example-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-example-"));
     cleanupDirs.push(opsHome);
 
     const env = {
       ...process.env,
-      CROC_OPS_HOME: opsHome
+      DELEXEC_HOME: opsHome
     };
 
     const output = JSON.parse((await execFileAsync(process.execPath, [CLI_PATH, "add-example-subagent"], { env })).stdout);
@@ -211,7 +211,7 @@ describe("ops cli integration", () => {
   });
 
   it("bootstraps the local client and stops at admin approval when operator credentials are unavailable", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-bootstrap-awaiting-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-bootstrap-awaiting-"));
     cleanupDirs.push(opsHome);
 
     const supervisorPort = String(56000 + Math.floor(Math.random() * 500));
@@ -223,7 +223,7 @@ describe("ops cli integration", () => {
     const platformServer = createPlatformServer({ serviceName: "ops-cli-bootstrap-awaiting", state: platformState });
     const platformUrl = await listenServer(platformServer);
 
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
     process.env.OPS_PORT_SUPERVISOR = supervisorPort;
     process.env.OPS_PORT_RELAY = relayPort;
@@ -238,7 +238,7 @@ describe("ops cli integration", () => {
     try {
       const env = {
         ...process.env,
-        CROC_OPS_HOME: opsHome,
+        DELEXEC_HOME: opsHome,
         PLATFORM_API_BASE_URL: platformUrl,
         OPS_PORT_SUPERVISOR: supervisorPort,
         OPS_PORT_RELAY: relayPort,
@@ -259,7 +259,7 @@ describe("ops cli integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -269,7 +269,7 @@ describe("ops cli integration", () => {
   });
 
   it("bootstraps the local client end-to-end when operator approval is available", async () => {
-    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-bootstrap-success-"));
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-bootstrap-success-"));
     cleanupDirs.push(opsHome);
 
     const supervisorPort = String(58000 + Math.floor(Math.random() * 500));
@@ -281,7 +281,7 @@ describe("ops cli integration", () => {
     const platformServer = createPlatformServer({ serviceName: "ops-cli-bootstrap-success", state: platformState });
     const platformUrl = await listenServer(platformServer);
 
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
     process.env.PLATFORM_ADMIN_API_KEY = platformState.adminApiKey;
     process.env.OPS_PORT_SUPERVISOR = supervisorPort;
@@ -297,7 +297,7 @@ describe("ops cli integration", () => {
     try {
       const env = {
         ...process.env,
-        CROC_OPS_HOME: opsHome,
+        DELEXEC_HOME: opsHome,
         PLATFORM_API_BASE_URL: platformUrl,
         PLATFORM_ADMIN_API_KEY: platformState.adminApiKey,
         OPS_PORT_SUPERVISOR: supervisorPort,
@@ -324,7 +324,7 @@ describe("ops cli integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.PLATFORM_ADMIN_API_KEY;
       delete process.env.OPS_PORT_SUPERVISOR;
@@ -334,12 +334,12 @@ describe("ops cli integration", () => {
     }
   });
   it("packs into a clean-room installable cli tarball", async () => {
-    const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-pack-"));
-    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "croc-ops-clean-room-"));
+    const packDir = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-pack-"));
+    const installDir = fs.mkdtempSync(path.join(os.tmpdir(), "delexec-ops-clean-room-"));
     cleanupDirs.push(packDir);
     cleanupDirs.push(installDir);
 
-    const packed = await execFileAsync("npm", ["pack", "--workspace", "@croc/ops"], {
+    const packed = await execFileAsync("npm", ["pack", "--workspace", "@delexec/ops"], {
       cwd: process.cwd(),
       env: process.env
     });
@@ -362,11 +362,11 @@ describe("ops cli integration", () => {
       env: process.env
     });
 
-    const doctor = await execFileAsync(path.join(installDir, "node_modules/.bin/croc-ops"), ["doctor"], {
+    const doctor = await execFileAsync(path.join(installDir, "node_modules/.bin/delexec-ops"), ["doctor"], {
       cwd: installDir,
       env: {
         ...process.env,
-        CROC_OPS_HOME: path.join(installDir, ".ops-home")
+        DELEXEC_HOME: path.join(installDir, ".ops-home")
       }
     });
     const output = JSON.parse(doctor.stdout);

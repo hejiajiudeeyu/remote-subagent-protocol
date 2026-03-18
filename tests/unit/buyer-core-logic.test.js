@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { canonicalizeResultPackageForSignature } from "@delexec/contracts";
 import {
   applyResultPackage,
   createRequestRecord,
   evaluateTimeouts,
   loadBuyerConfig
-} from "@croc/buyer-controller-core";
+} from "@delexec/buyer-controller-core";
 
 function makeRequest(overrides = {}) {
   const now = Date.now();

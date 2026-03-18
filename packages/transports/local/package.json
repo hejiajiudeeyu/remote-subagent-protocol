@@ -1,8 +1,23 @@
 {
-  "name": "@croc/transport-local",
+  "name": "@delexec/transport-local",
   "version": "0.1.0",
-  "private": true,
+  "description": "Local in-memory transport adapters for delegated execution",
   "type": "module",
   "main": "src/index.js",
-  "exports": "./src/index.js"
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "delegated-execution",
+    "transport",
+    "local"
+  ]
 }

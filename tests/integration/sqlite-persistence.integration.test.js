@@ -8,10 +8,10 @@ import {
   createPlatformState,
   hydratePlatformState,
   serializePlatformState
-} from "@croc/platform-api";
-import { createBuyerState, hydrateBuyerState, serializeBuyerState } from "@croc/buyer-controller-core";
-import { createSellerState, hydrateSellerState, serializeSellerState } from "@croc/seller-runtime-core";
-import { createSqliteSnapshotStore } from "@croc/sqlite-store";
+} from "@delexec/platform-api";
+import { createBuyerState, hydrateBuyerState, serializeBuyerState } from "@delexec/buyer-controller-core";
+import { createSellerState, hydrateSellerState, serializeSellerState } from "@delexec/seller-runtime-core";
+import { createSqliteSnapshotStore } from "@delexec/sqlite-store";
 
 describe("sqlite snapshot persistence", () => {
   const tempDirs = [];

@@ -17,7 +17,7 @@ node scripts/coding-agent-bootstrap.mjs --email coding-agent@local.test --platfo
 
 The bootstrap flow will attempt to complete:
 
-1. `croc-ops setup`
+1. `delexec-ops setup`
 2. buyer registration
 3. official example subagent install
 4. seller review submission
@@ -64,7 +64,7 @@ npm run ops -- run-example --text "Summarize this request."
 
 Useful logs and snapshots:
 
-- local ops home: `~/.remote-subagent`
-- runtime logs: `~/.remote-subagent/logs`
+- local ops home: `~/.delexec`
+- runtime logs: `~/.delexec/logs`
 - debug snapshot: `GET http://127.0.0.1:8079/debug/snapshot`
 - supervisor status: `GET http://127.0.0.1:8079/status`

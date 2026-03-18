@@ -1,5 +1,10 @@
 # Testing Strategy (MVP v0.1)
 
+预拆分附加规则：
+
+- E2E 与 compatibility 测试优先使用独立进程边界，不直接 import 各服务的 server factory
+- 未来跨仓验收的启动约定见 [Cross-Repo Compatibility Testing](/Users/hejiajiudeeyu/Documents/Projects/remote-subagent-protocol/docs/current/testing/cross-repo-compatibility-testing.md)
+
 ## 1. 目标
 
 建立可持续测试体系，覆盖三端基础行为、核心失败分支，以及面向调试的双反馈面：
@@ -11,7 +16,7 @@
 
 - Unit：状态机、错误码、schema 约束等纯逻辑
 - Integration：单服务 HTTP 接口与内存状态行为
-- E2E：Platform + Buyer Controller + Seller Controller 的端到端场景
+- E2E：Platform + Buyer Controller + Seller Controller 的端到端场景，按独立进程 / HTTP 边界运行
 - Compose Smoke：Docker 真实进程冒烟（`tests/smoke/compose-smoke.mjs`）
 
 ## 3. 场景来源

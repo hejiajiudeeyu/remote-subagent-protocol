@@ -8,7 +8,7 @@ import {
   getErrorDomain,
   isKnownErrorCode,
   isRetryableErrorCode
-} from "@croc/contracts";
+} from "@delexec/contracts";
 
 describe("error codes and retryable markers", () => {
   it("every known error code has a valid domain prefix", () => {

@@ -6,8 +6,8 @@ This guide describes the current supported path for letting an AI help an end us
 
 Current truth:
 
-- the repository contains the real `@croc/ops` CLI workspace
-- the repository does **not** yet contain a verified npm publish flow for `@croc/ops`
+- the repository contains the real `@delexec/ops` CLI workspace
+- the repository does **not** yet contain a verified npm publish flow for `@delexec/ops`
 - current user-facing install guidance should therefore use the **repo-local** path
 
 Use:
@@ -17,7 +17,7 @@ npm install
 npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080
 ```
 
-Do not assume `npx @croc/ops ...` is available unless a separate publish workflow has been completed and documented.
+Do not assume `npx @delexec/ops ...` is available unless a separate publish workflow has been completed and documented.
 
 ## What The AI Should Do
 
@@ -38,7 +38,7 @@ npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:808
 
 This flow attempts to:
 
-1. initialize `~/.remote-subagent`
+1. initialize `~/.delexec`
 2. register the buyer
 3. install the official example subagent
 4. submit seller and subagent review

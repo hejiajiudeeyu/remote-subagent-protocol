@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@delexec/contracts";
 
 export const BUYER_TERMINAL_STATUSES = Object.freeze(["SUCCEEDED", "FAILED", "UNVERIFIED", "TIMED_OUT"]);
 export const BUYER_ACTIVE_STATUSES = Object.freeze(["CREATED", "SENT", "ACKED"]);

@@ -4,8 +4,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createRelayServer } from "@croc/transport-relay";
-import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
+import { createRelayServer } from "@delexec/transport-relay";
+import { createRelayHttpTransportAdapter } from "@delexec/transport-relay-http";
 import { closeServer, listenServer } from "../helpers/http.js";
 
 describe("relay-http transport integration", () => {
@@ -18,7 +18,7 @@ describe("relay-http transport integration", () => {
   });
 
   it("sends, polls, acks, and peeks through relay server", async () => {
-    const tempDir = await mkdtemp(path.join(os.tmpdir(), "croc-relay-"));
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "delexec-relay-"));
     cleanup.push(() => rm(tempDir, { recursive: true, force: true }));
 
     const relayServer = createRelayServer();

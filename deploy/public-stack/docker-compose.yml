@@ -55,12 +55,12 @@ services:
     environment:
       PORT: ${GATEWAY_PORT:-8085}
       HOST: 0.0.0.0
-      CROC_OPS_HOME: /var/lib/croc-ops
+      DELEXEC_HOME: /var/lib/delexec-ops
       PLATFORM_API_BASE_URL: http://platform-api:${PLATFORM_PORT:-8080}
       PLATFORM_ADMIN_API_KEY: ${PLATFORM_ADMIN_API_KEY:-}
       PLATFORM_CONSOLE_BOOTSTRAP_SECRET: ${PLATFORM_CONSOLE_BOOTSTRAP_SECRET:?PLATFORM_CONSOLE_BOOTSTRAP_SECRET must be set for public deployments}
     volumes:
-      - public-stack-gateway-data:/var/lib/croc-ops
+      - public-stack-gateway-data:/var/lib/delexec-ops
     depends_on:
       platform-api:
         condition: service_started

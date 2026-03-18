@@ -1,15 +1,16 @@
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { createBuyerControllerServer, createBuyerState, hydrateBuyerState, serializeBuyerState } from "@croc/buyer-controller-core";
-import { createPostgresSnapshotStore } from "@croc/postgres-store";
-import { createSqliteSnapshotStore } from "@croc/sqlite-store";
-import { createEmailEngineTransportAdapter } from "@croc/transport-emailengine";
-import { createGmailTransportAdapter } from "@croc/transport-gmail";
-import { createRelayHttpTransportAdapter } from "@croc/transport-relay-http";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
+import { createBuyerControllerServer, createBuyerState, hydrateBuyerState, serializeBuyerState } from "@delexec/buyer-controller-core";
+import { createPostgresSnapshotStore } from "@delexec/postgres-store";
+import { createSqliteSnapshotStore } from "@delexec/sqlite-store";
+import { createEmailEngineTransportAdapter } from "@delexec/transport-emailengine";
+import { createGmailTransportAdapter } from "@delexec/transport-gmail";
+import { createRelayHttpTransportAdapter } from "@delexec/transport-relay-http";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@delexec/runtime-utils";
 
-export * from "@croc/buyer-controller-core";
+export * from "@delexec/buyer-controller-core";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -21,7 +22,7 @@ function isDirectRun() {
   if (!process.argv[1]) {
     return false;
   }
-  return path.resolve(process.argv[1]) === __filename;
+  return fs.realpathSync.native(path.resolve(process.argv[1])) === fs.realpathSync.native(__filename);
 }
 
 function loadPlatformConfigFromEnv() {

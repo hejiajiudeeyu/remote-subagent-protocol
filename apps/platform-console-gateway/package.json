@@ -1,5 +1,5 @@
 {
-  "name": "@croc/platform-console-gateway",
+  "name": "@delexec/platform-console-gateway",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -7,7 +7,7 @@
     "start": "node src/server.js"
   },
   "dependencies": {
-    "@croc/contracts": "0.1.0",
-    "@croc/runtime-utils": "0.1.0"
+    "@delexec/contracts": "0.1.0",
+    "@delexec/runtime-utils": "0.1.0"
   }
 }

@@ -5,7 +5,7 @@ import {
   createSimulatorExecutor,
   createSubagentRouterExecutor,
   deferTask
-} from "@croc/seller-runtime-core";
+} from "@delexec/seller-runtime-core";
 
 describe("deferTask", () => {
   it("returns deferred marker with default reason", () => {

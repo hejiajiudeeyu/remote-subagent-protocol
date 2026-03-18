@@ -3,8 +3,8 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { buildStructuredError } from "@croc/contracts";
-import { buildOpsEnvSearchPaths, loadEnvFiles } from "@croc/runtime-utils";
+import { buildStructuredError } from "@delexec/contracts";
+import { buildOpsEnvSearchPaths, loadEnvFiles } from "@delexec/runtime-utils";
 import Database from "better-sqlite3";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -21,7 +21,7 @@ function isDirectRun() {
   if (!process.argv[1]) {
     return false;
   }
-  return path.resolve(process.argv[1]) === __filename;
+  return fs.realpathSync.native(path.resolve(process.argv[1])) === fs.realpathSync.native(__filename);
 }
 
 function nowIso() {

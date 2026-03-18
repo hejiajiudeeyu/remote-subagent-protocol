@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
 import { createPlatformConsoleGatewayServer } from "../../apps/platform-console-gateway/src/server.js";
 import { closeServer, jsonRequest, listenServer } from "../helpers/http.js";
 
@@ -16,7 +16,7 @@ describe("platform console gateway integration", () => {
       const dir = cleanupDirs.pop();
       fs.rmSync(dir, { recursive: true, force: true });
     }
-    delete process.env.CROC_OPS_HOME;
+    delete process.env.DELEXEC_HOME;
     delete process.env.PLATFORM_API_BASE_URL;
     delete process.env.PLATFORM_CONSOLE_BOOTSTRAP_SECRET;
   });
@@ -24,7 +24,7 @@ describe("platform console gateway integration", () => {
   it("stores admin credentials in the encrypted local secret store and proxies admin requests", async () => {
     const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "platform-console-gateway-"));
     cleanupDirs.push(opsHome);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
 
     const adminApiKey = "sk_admin_integration_test";
     const platformState = createPlatformState({ adminApiKey });
@@ -99,7 +99,7 @@ describe("platform console gateway integration", () => {
   it("requires a bootstrap secret for non-local initial setup and accepts it when provided", async () => {
     const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "platform-console-gateway-secret-"));
     cleanupDirs.push(opsHome);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_CONSOLE_BOOTSTRAP_SECRET = "bootstrap-secret-test";
 
     const gateway = createPlatformConsoleGatewayServer();

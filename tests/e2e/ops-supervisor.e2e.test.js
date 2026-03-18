@@ -1,55 +1,83 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
-import { createOpsSupervisorServer } from "../../apps/ops/src/supervisor.js";
 import { runCase } from "../helpers/case-runner.js";
-import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
+import { jsonRequest, waitFor } from "../helpers/http.js";
+import { resolveHttpServiceLaunch, startNodeHttpService, stopNodeHttpService } from "../helpers/process.js";
 
 describe("e2e: ops supervisor path", () => {
   let opsHome;
-  let platformState;
-  let platformServer;
+  let platformAdminApiKey;
+  let platform;
   let platformUrl;
   let supervisor;
   let supervisorUrl;
 
   beforeAll(async () => {
     opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "ops-supervisor-e2e-"));
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.OPS_PORT_SUPERVISOR = String(28000 + Math.floor(Math.random() * 1000));
     process.env.OPS_PORT_RELAY = String(29000 + Math.floor(Math.random() * 1000));
     process.env.OPS_PORT_BUYER = String(30000 + Math.floor(Math.random() * 1000));
     process.env.OPS_PORT_SELLER = String(31000 + Math.floor(Math.random() * 1000));
+    platformAdminApiKey = `sk_admin_${crypto.randomBytes(12).toString("hex")}`;
 
-    platformState = createPlatformState();
-    platformServer = createPlatformServer({ serviceName: "platform-api-ops-e2e", state: platformState });
-    platformUrl = await listenServer(platformServer);
+    const platformPort = 32000 + Math.floor(Math.random() * 1000);
+    const supervisorPort = Number(process.env.OPS_PORT_SUPERVISOR);
+    platform = await startNodeHttpService({
+      name: "platform-ops-e2e",
+      ...resolveHttpServiceLaunch({
+        serviceName: "platform",
+        entryPath: path.join(process.cwd(), "apps/platform-api/src/server.js")
+      }),
+      entryPath: path.join(process.cwd(), "apps/platform-api/src/server.js"),
+      port: platformPort,
+      env: {
+        DELEXEC_HOME: opsHome,
+        SERVICE_NAME: "platform-api-ops-e2e",
+        PLATFORM_ADMIN_API_KEY: platformAdminApiKey,
+        TOKEN_SECRET: `ops-e2e-token-secret-${crypto.randomBytes(8).toString("hex")}`
+      }
+    });
+    platformUrl = platform.baseUrl;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
-    supervisor = createOpsSupervisorServer();
-    supervisor.listen(0, "127.0.0.1");
-    await new Promise((resolve) => supervisor.once("listening", resolve));
-    supervisorUrl = `http://127.0.0.1:${supervisor.address().port}`;
-    await jsonRequest(supervisorUrl, "/setup", { method: "POST", body: {} });
-    await supervisor.startManagedServices();
-  });
+    supervisor = await startNodeHttpService({
+      name: "ops-supervisor-e2e",
+      ...resolveHttpServiceLaunch({
+        serviceName: "ops_supervisor",
+        entryPath: path.join(process.cwd(), "apps/ops/src/cli.js"),
+        defaultArgs: ["start"]
+      }),
+      entryPath: path.join(process.cwd(), "apps/ops/src/cli.js"),
+      port: supervisorPort,
+      env: {
+        DELEXEC_HOME: opsHome,
+        PLATFORM_API_BASE_URL: platformUrl,
+        OPS_PORT_SUPERVISOR: process.env.OPS_PORT_SUPERVISOR,
+        OPS_PORT_RELAY: process.env.OPS_PORT_RELAY,
+        OPS_PORT_BUYER: process.env.OPS_PORT_BUYER,
+        OPS_PORT_SELLER: process.env.OPS_PORT_SELLER
+      }
+    });
+    supervisorUrl = supervisor.baseUrl;
+  }, 30000);
 
   afterAll(async () => {
-    await supervisor.stopManagedServices();
-    await closeServer(supervisor);
-    await closeServer(platformServer);
+    await stopNodeHttpService(supervisor);
+    await stopNodeHttpService(platform);
     fs.rmSync(opsHome, { recursive: true, force: true });
-    delete process.env.CROC_OPS_HOME;
+    delete process.env.DELEXEC_HOME;
     delete process.env.PLATFORM_API_BASE_URL;
     delete process.env.OPS_PORT_SUPERVISOR;
     delete process.env.OPS_PORT_RELAY;
     delete process.env.OPS_PORT_BUYER;
     delete process.env.OPS_PORT_SELLER;
-  });
+  }, 30000);
 
   it("completes request via setup -> register buyer -> submit review -> enable seller", async () => {
     await runCase({
@@ -91,7 +119,7 @@ describe("e2e: ops supervisor path", () => {
         });
         expect(enable.status).toBe(200);
 
-        const adminHeader = { Authorization: `Bearer ${platformState.adminApiKey}` };
+        const adminHeader = { Authorization: `Bearer ${platformAdminApiKey}` };
         const approveSeller = await jsonRequest(platformUrl, "/v1/admin/sellers/seller_ops_e2e/approve", {
           method: "POST",
           headers: adminHeader,
@@ -185,7 +213,7 @@ describe("e2e: ops supervisor path", () => {
         });
         expect(enable.status).toBe(200);
 
-        const adminHeader = { Authorization: `Bearer ${platformState.adminApiKey}` };
+        const adminHeader = { Authorization: `Bearer ${platformAdminApiKey}` };
         const approveSeller = await jsonRequest(platformUrl, `/v1/admin/sellers/${sellerId}/approve`, {
           method: "POST",
           headers: adminHeader,

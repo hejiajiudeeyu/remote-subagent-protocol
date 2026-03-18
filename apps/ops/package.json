@@ -1,43 +1,62 @@
 {
-  "name": "@croc/ops",
+  "name": "@delexec/ops",
   "version": "0.1.0",
+  "description": "Unified operator CLI for delegated execution clients",
   "type": "module",
   "bin": {
+    "delexec-ops": "src/cli.js",
     "croc-ops": "src/cli.js"
   },
   "bundleDependencies": [
-    "@croc/buyer-controller",
-    "@croc/buyer-controller-core",
-    "@croc/contracts",
-    "@croc/postgres-store",
-    "@croc/runtime-utils",
-    "@croc/seller-controller",
-    "@croc/seller-runtime-core",
-    "@croc/sqlite-store",
-    "@croc/transport-email",
-    "@croc/transport-emailengine",
-    "@croc/transport-gmail",
-    "@croc/transport-relay",
-    "@croc/transport-relay-http"
+    "@delexec/buyer-controller",
+    "@delexec/buyer-controller-core",
+    "@delexec/contracts",
+    "@delexec/postgres-store",
+    "@delexec/runtime-utils",
+    "@delexec/seller-controller",
+    "@delexec/seller-runtime-core",
+    "@delexec/sqlite-store",
+    "@delexec/transport-email",
+    "@delexec/transport-emailengine",
+    "@delexec/transport-gmail",
+    "@delexec/transport-relay",
+    "@delexec/transport-relay-http"
+  ],
+  "main": "src/cli.js",
+  "exports": {
+    ".": "./src/cli.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
   ],
   "scripts": {
-    "prepack": "node ../../scripts/bundle-workspace-deps.mjs stage",
-    "postpack": "node ../../scripts/bundle-workspace-deps.mjs cleanup",
+    "prepack": "node ../../scripts/bundle-workspace-deps.mjs stage apps/ops",
+    "postpack": "node ../../scripts/bundle-workspace-deps.mjs cleanup apps/ops",
     "start": "node src/cli.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "delegated-execution",
+    "ops",
+    "cli"
+  ],
   "dependencies": {
-    "@croc/buyer-controller": "0.1.0",
-    "@croc/buyer-controller-core": "0.1.0",
-    "@croc/contracts": "0.1.0",
-    "@croc/postgres-store": "0.1.0",
-    "@croc/runtime-utils": "0.1.0",
-    "@croc/seller-controller": "0.1.0",
-    "@croc/seller-runtime-core": "0.1.0",
-    "@croc/sqlite-store": "0.1.0",
-    "@croc/transport-email": "0.1.0",
-    "@croc/transport-emailengine": "0.1.0",
-    "@croc/transport-gmail": "0.1.0",
-    "@croc/transport-relay": "0.1.0",
-    "@croc/transport-relay-http": "0.1.0"
+    "@delexec/buyer-controller": "0.1.0",
+    "@delexec/buyer-controller-core": "0.1.0",
+    "@delexec/contracts": "0.1.0",
+    "@delexec/postgres-store": "0.1.0",
+    "@delexec/runtime-utils": "0.1.0",
+    "@delexec/seller-controller": "0.1.0",
+    "@delexec/seller-runtime-core": "0.1.0",
+    "@delexec/sqlite-store": "0.1.0",
+    "@delexec/transport-email": "0.1.0",
+    "@delexec/transport-emailengine": "0.1.0",
+    "@delexec/transport-gmail": "0.1.0",
+    "@delexec/transport-relay": "0.1.0",
+    "@delexec/transport-relay-http": "0.1.0"
   }
 }

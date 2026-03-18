@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import http from "node:http";
 
-import { buildStructuredError, canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { buildStructuredError, canonicalizeResultPackageForSignature } from "@delexec/contracts";
 import {
   createConfiguredSubagentExecutor,
   createExampleFunctionExecutor,

@@ -22,6 +22,12 @@
 - 合约模板、schema、时序图与接入手册
 - 单元、集成、端到端与 compose smoke 测试
 
+这个仓库当前处于“预拆分”阶段：
+
+- `packages/contracts` 正在被收口为第一个可发布的协议产物
+- client/runtime 与 platform/deploy 代码仍暂时保留在 monorepo 内，以保持联调效率
+- 新 scope 和三仓命名目前只存在于规划文档中，尚未正式执行 rename
+
 当前已实现的结果交付基线：
 
 - platform 为单次请求下发双向 `delivery-meta`，同时包含 `task_delivery` 与 `result_delivery`
@@ -32,6 +38,11 @@
 ## 仓库边界
 
 这个仓库采用 protocol-first 定位。任何实现侧的产品逻辑、分发策略、业务流程以及其他非协议内容，都应放在独立实现中，并依赖本仓库这个协议真相源，而不是在外部实现里重复定义协议事实。
+
+预拆分边界文档：
+
+- [协议预拆分边界](docs/current/guides/protocol-pre-split-boundary.md)
+- [预拆分命名矩阵](docs/current/guides/pre-split-naming-matrix.md)
 
 ## 核心文档
 
@@ -51,6 +62,8 @@
 - [Release 兼容矩阵](docs/archive/releases/compatibility-matrix.md)
 - [当前收尾清单](docs/current/status/current-closeout-checklist.md)
 - [Release 流程](docs/current/guides/release-process.md)
+- [协议预拆分边界](docs/current/guides/protocol-pre-split-boundary.md)
+- [预拆分命名矩阵](docs/current/guides/pre-split-naming-matrix.md)
 - [协议 Playground](site/protocol-playground.html)
 
 ## 参考实现
@@ -64,7 +77,7 @@
 ## 终端用户 Ops 客户端
 
 - `npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080`：单命令完成本地 buyer / seller bootstrap
-- `npm run ops -- setup`：初始化统一本地客户端，配置写入 `~/.remote-subagent`
+- `npm run ops -- setup`：初始化统一本地客户端，配置写入 `~/.delexec`
 - `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080`：注册 buyer API key
 - `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"`：接入一个本地 seller subagent
 - `npm run ops -- remove-subagent --subagent-id local.echo.v1`：从 seller 端本地删除一个 subagent
@@ -89,7 +102,7 @@
 - `npm run dev:platform-console-gateway`：`platform-console` 使用的本地 operator gateway
 - `npm run dev:platform-console`：平台管理控制台前端
 - `ops-console` 已包含 setup wizard、请求 timeline / result 面板、runtime alerts 和本地 debug snapshot
-- `ops-console` 现在支持本地 passphrase 解锁；敏感信息写入 `~/.remote-subagent/secrets.enc.json`，不再放在浏览器存储中
+- `ops-console` 现在支持本地 passphrase 解锁；敏感信息写入 `~/.delexec/secrets.enc.json`，不再放在浏览器存储中
 - `platform-console` 现在必须通过 `platform-console-gateway` 访问平台管理接口；浏览器不再直接保存 `PLATFORM_ADMIN_API_KEY`
 - `platform-console` 仍包含 reviewer guidance、review/audit 历史摘要，以及基于 reviewer notes 的 approve / reject / enable / disable 操作，并在 subagent 详情中展示最近一次隐藏审核测试结论
 
@@ -99,7 +112,7 @@
 - 手动路径：`npm install -> npm run ops -- setup -> auth register -> add-subagent -> submit-review -> enable-seller -> start`
 - 完整终端用户步骤与排障说明见 [deploy/ops](deploy/ops)
 - AI 辅助终端用户部署说明见 [End-User AI Deployment Guide](docs/current/guides/end-user-ai-deployment-guide.md)
-- 终端用户本地日志默认写入 `~/.remote-subagent/logs`，`ops-console` 通过 supervisor 读取这些日志
+- 终端用户本地日志默认写入 `~/.delexec/logs`，`ops-console` 通过 supervisor 读取这些日志
 - Docker / Compose 继续主要用于 platform、relay、CI、本地联调和高级独立部署
 - `make deploy-public-stack`：首个面向 operator 的公网入口 bundle
 - `npm run test:public-stack-smoke`：验证公网入口 bundle

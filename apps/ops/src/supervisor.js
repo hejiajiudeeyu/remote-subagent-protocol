@@ -1,10 +1,12 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
 import http from "node:http";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-import { buildStructuredError } from "@croc/contracts";
+import { buildStructuredError } from "@delexec/contracts";
 import {
   buildTransportEnvUpdates,
   buildTransportSecretUpdates,
@@ -39,9 +41,11 @@ import {
   readServiceLogTail,
   readSupervisorEventTail
 } from "./logging.js";
-import { initializeSecretStore, rotateSecretStorePassphrase } from "@croc/runtime-utils";
+import { initializeSecretStore, rotateSecretStorePassphrase } from "@delexec/runtime-utils";
 
 const require = createRequire(import.meta.url);
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function nowIso() {
   return new Date().toISOString();
@@ -98,6 +102,19 @@ async function requestJson(baseUrl, pathname, { method = "GET", headers = {}, bo
 
 function processBaseUrl(port) {
   return `http://127.0.0.1:${port}`;
+}
+
+function parseJsonArrayEnv(value) {
+  const normalized = normalizedString(value);
+  if (!normalized) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(normalized);
+    return Array.isArray(parsed) ? parsed.map((item) => String(item)) : [normalized];
+  } catch {
+    return normalized.split(/\s+/).filter(Boolean);
+  }
 }
 
 function normalizedString(value) {
@@ -522,6 +539,7 @@ export function createOpsSupervisorServer() {
       return {
         name,
         running: false,
+        launch_mode: null,
         pid: null,
         started_at: null,
         exited_at: null,
@@ -532,12 +550,68 @@ export function createOpsSupervisorServer() {
     return {
       name,
       running: !processInfo.exited,
+      launch_mode: processInfo.launchMode || null,
       pid: processInfo.child.pid,
       started_at: processInfo.startedAt,
       exited_at: processInfo.exitedAt,
       exit_code: processInfo.exitCode,
       last_error: processInfo.lastError
     };
+  }
+
+  function usesManagedRelay() {
+    return getRuntimeTransport(state).type === "local";
+  }
+
+  function resolveRelayPackageEntry() {
+    const candidatePackageJsons = [
+      path.resolve(__dirname, "../../transport-relay/package.json"),
+      path.resolve(__dirname, "../node_modules/@delexec/transport-relay/package.json")
+    ];
+
+    for (const packageJsonPath of candidatePackageJsons) {
+      if (!fs.existsSync(packageJsonPath)) {
+        continue;
+      }
+      const manifest = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+      const packageRoot = path.dirname(packageJsonPath);
+      if (typeof manifest.bin === "string") {
+        return path.resolve(packageRoot, manifest.bin);
+      }
+      if (manifest.bin && typeof manifest.bin === "object") {
+        const relayBin = manifest.bin["delexec-relay"] || Object.values(manifest.bin)[0];
+        if (relayBin) {
+          return path.resolve(packageRoot, relayBin);
+        }
+      }
+      if (typeof manifest.main === "string") {
+        return path.resolve(packageRoot, manifest.main);
+      }
+    }
+
+    return null;
+  }
+
+  function relayLaunchSpec() {
+    const configuredBin = normalizedString(process.env.OPS_RELAY_BIN);
+    if (configuredBin) {
+      return {
+        command: configuredBin,
+        args: parseJsonArrayEnv(process.env.OPS_RELAY_ARGS),
+        mode: "configured_command"
+      };
+    }
+
+    const packageEntry = resolveRelayPackageEntry();
+    if (packageEntry) {
+      return {
+        command: process.execPath,
+        args: [packageEntry],
+        mode: "package_entry"
+      };
+    }
+
+    throw new Error("relay_launch_command_not_found");
   }
 
   function serviceEnv(name) {
@@ -560,7 +634,7 @@ export function createOpsSupervisorServer() {
     );
     const base = {
       ...process.env,
-      CROC_OPS_HOME: process.env.CROC_OPS_HOME || path.dirname(state.envFile),
+      DELEXEC_HOME: process.env.DELEXEC_HOME || path.dirname(state.envFile),
       PLATFORM_API_BASE_URL: state.config.platform.base_url,
       BUYER_PLATFORM_API_KEY: resolvedSecrets.buyer_api_key || "",
       PLATFORM_API_KEY: resolvedSecrets.buyer_api_key || "",
@@ -611,13 +685,21 @@ export function createOpsSupervisorServer() {
   }
 
   function serviceEntry(name) {
-    if (name === "relay") {
-      return require.resolve("@croc/transport-relay");
-    }
     if (name === "buyer") {
-      return require.resolve("@croc/buyer-controller");
+      return require.resolve("@delexec/buyer-controller");
     }
-    return require.resolve("@croc/seller-controller");
+    return require.resolve("@delexec/seller-controller");
+  }
+
+  function serviceLaunchSpec(name) {
+    if (name === "relay") {
+      return relayLaunchSpec();
+    }
+    return {
+      command: process.execPath,
+      args: [serviceEntry(name)],
+      mode: "node_entry"
+    };
   }
 
   function captureLog(processInfo, line) {
@@ -633,7 +715,8 @@ export function createOpsSupervisorServer() {
     if (current && !current.exited) {
       return current;
     }
-    const child = spawn(process.execPath, [serviceEntry(name)], {
+    const launch = serviceLaunchSpec(name);
+    const child = spawn(launch.command, launch.args, {
       env: serviceEnv(name),
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -642,6 +725,7 @@ export function createOpsSupervisorServer() {
       child,
       logs: [],
       startedAt: nowIso(),
+      launchMode: launch.mode,
       exited: false,
       exitedAt: null,
       exitCode: null,
@@ -677,7 +761,9 @@ export function createOpsSupervisorServer() {
   }
 
   async function ensureBaseServices() {
-    await ensureService("relay");
+    if (usesManagedRelay()) {
+      await ensureService("relay");
+    }
     await ensureService("buyer");
     if (state.config.seller.enabled) {
       await ensureService("seller");
@@ -697,6 +783,17 @@ export function createOpsSupervisorServer() {
 
   async function fetchHealth(name) {
     const port = state.config.runtime.ports[name];
+    if (name === "relay" && !usesManagedRelay()) {
+      const runtimeTransport = getRuntimeTransport(state);
+      if (runtimeTransport.type !== "relay_http") {
+        return null;
+      }
+      try {
+        return await requestJson(runtimeTransport.relay_http.base_url, "/healthz");
+      } catch (error) {
+        return { status: 503, body: { ok: false, error: error instanceof Error ? error.message : "unknown_error" } };
+      }
+    }
     try {
       return await requestJson(processBaseUrl(port), "/healthz");
     } catch (error) {
@@ -734,6 +831,7 @@ export function createOpsSupervisorServer() {
   async function buildStatus() {
     const subagents = state.config.seller.subagents || [];
     const secrets = getResolvedSecrets(state, runtime);
+    const runtimeTransport = getRuntimeTransport(state);
     const pendingReviewCount = subagents.filter((item) => item.submitted_for_review !== true).length;
     const reviewStatusCounts = subagents.reduce((counts, item) => {
       const key = item.review_status || "local_only";
@@ -771,6 +869,9 @@ export function createOpsSupervisorServer() {
         },
         relay: {
           ...getRuntimeStatus("relay"),
+          managed: usesManagedRelay(),
+          transport_type: runtimeTransport.type,
+          base_url: runtimeTransport.type === "relay_http" ? runtimeTransport.relay_http.base_url : processBaseUrl(state.config.runtime.ports.relay),
           health: await fetchHealth("relay")
         },
         buyer: {

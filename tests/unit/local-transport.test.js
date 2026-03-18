@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createLocalTransportHub, createLocalTransportAdapter } from "@croc/transport-local";
+import { createLocalTransportHub, createLocalTransportAdapter } from "@delexec/transport-local";
 
 describe("createLocalTransportAdapter", () => {
   it("throws when hub is missing", () => {

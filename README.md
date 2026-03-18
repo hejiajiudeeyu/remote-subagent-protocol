@@ -22,6 +22,12 @@ This repository is the protocol source of truth and currently includes:
 - contract templates, schemas, diagrams, and integration guides
 - test suites for unit, integration, e2e, and compose smoke flows
 
+The repository is currently in a pre-split phase:
+
+- `packages/contracts` is being hardened as the first publishable protocol artifact
+- client/runtime and platform/deploy code still live in the monorepo for development efficiency
+- future scope and repository names are frozen in planning docs only, not yet applied to the implementation
+
 Current implemented result-delivery baseline:
 
 - platform issues request-scoped `delivery-meta` with both `task_delivery` and `result_delivery`
@@ -32,6 +38,11 @@ Current implemented result-delivery baseline:
 ## Repository Scope
 
 This repository is protocol-first. Implementation-specific product logic, distribution strategy, operational workflows, and other non-protocol concerns should live outside this repository and depend on this protocol source of truth instead of redefining it.
+
+Pre-split boundary documents:
+
+- [Protocol Pre-Split Boundary](docs/current/guides/protocol-pre-split-boundary.md)
+- [Pre-Split Naming Matrix](docs/current/guides/pre-split-naming-matrix.md)
 
 ## Core Documents
 
@@ -50,6 +61,8 @@ This repository is protocol-first. Implementation-specific product logic, distri
 - [Deployment Guide](docs/current/guides/deployment-guide.md)
 - [Product Readiness Boundary](docs/current/guides/product-readiness-boundary.md)
 - [Release Process](docs/current/guides/release-process.md)
+- [Protocol Pre-Split Boundary](docs/current/guides/protocol-pre-split-boundary.md)
+- [Pre-Split Naming Matrix](docs/current/guides/pre-split-naming-matrix.md)
 - [Release Compatibility Matrix](docs/archive/releases/compatibility-matrix.md)
 - [Protocol Playground](site/protocol-playground.html)
 
@@ -65,7 +78,7 @@ This repository is protocol-first. Implementation-specific product logic, distri
 ## End-User Ops Client
 
 - `npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080` to run the single-command local bootstrap path
-- `npm run ops -- setup` to initialize the unified local ops client under `~/.remote-subagent`
+- `npm run ops -- setup` to initialize the unified local ops client under `~/.delexec`
 - `npm run ops -- auth register --email you@example.com --platform http://127.0.0.1:8080` to register a buyer API key
 - `npm run ops -- add-example-subagent` to install the bundled `local.summary.v1` demo seller
 - `npm run ops -- add-subagent --type process --subagent-id local.echo.v1 --cmd "node worker.js"` to attach a local seller subagent
@@ -92,7 +105,7 @@ This repository is protocol-first. Implementation-specific product logic, distri
 - `npm run dev:platform-console-gateway` for the local operator gateway used by `platform-console`
 - `npm run dev:platform-console` for the platform admin console frontend
 - `ops-console` now includes a setup wizard, request timeline/result panels, runtime alerts, and local debug snapshot support
-- `ops-console` now requires a local passphrase-backed session once `~/.remote-subagent/secrets.enc.json` is initialized; secrets stay in the encrypted local store instead of browser storage
+- `ops-console` now requires a local passphrase-backed session once `~/.delexec/secrets.enc.json` is initialized; secrets stay in the encrypted local store instead of browser storage
 - `platform-console` now uses the local `platform-console-gateway`; the browser no longer stores `PLATFORM_ADMIN_API_KEY` in `localStorage`
 - `platform-console` still includes reviewer guidance, review/audit history summaries, reviewer note-driven approve/reject/enable/disable actions, and latest hidden review-test outcomes in subagent detail
 - Seller CLI/runtime architecture: [docs/planned/design/seller-runtime-cli.md](docs/planned/design/seller-runtime-cli.md)
@@ -104,7 +117,7 @@ This repository is protocol-first. Implementation-specific product logic, distri
 - Official local demo path: `npm install && npm run ops -- bootstrap --email you@example.com --platform http://127.0.0.1:8080 --text "Summarize this request."`
 - For the full end-user sequence and troubleshooting notes, see [deploy/ops](deploy/ops)
 - For AI-assisted end-user setup, see [End-User AI Deployment Guide](docs/current/guides/end-user-ai-deployment-guide.md)
-- End-user local logs are written under `~/.remote-subagent/logs`, and `ops-console` reads them through the supervisor
+- End-user local logs are written under `~/.delexec/logs`, and `ops-console` reads them through the supervisor
 - Docker/Compose remains the recommended path for platform, relay, CI, local integration, and advanced standalone deployments
 - `make deploy-public-stack` for the first operator-facing public ingress bundle
 - `npm run test:public-stack-smoke` to validate the public ingress bundle

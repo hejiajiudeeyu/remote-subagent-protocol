@@ -14,29 +14,29 @@ const CLI_PATH = fileURLToPath(import.meta.url);
 
 function usage() {
   console.log(`Usage:
-  croc-ops setup
-  croc-ops start
-  croc-ops status
-  croc-ops bootstrap [--email <email>] [--platform <url>] [--text <text>]
-  croc-ops auth register --email <email> [--platform <url>]
-  croc-ops enable-seller [--seller-id <id>] [--display-name <name>]
-  croc-ops add-subagent --type <process|http> --subagent-id <id> [options]
-  croc-ops add-example-subagent
-  croc-ops remove-subagent --subagent-id <id>
-  croc-ops enable-subagent --subagent-id <id>
-  croc-ops disable-subagent --subagent-id <id>
-  croc-ops submit-review
-  croc-ops run-example [--text <text>]
-  croc-ops doctor
-  croc-ops debug-snapshot
+  delexec-ops setup
+  delexec-ops start
+  delexec-ops status
+  delexec-ops bootstrap [--email <email>] [--platform <url>] [--text <text>]
+  delexec-ops auth register --email <email> [--platform <url>]
+  delexec-ops enable-seller [--seller-id <id>] [--display-name <name>]
+  delexec-ops add-subagent --type <process|http> --subagent-id <id> [options]
+  delexec-ops add-example-subagent
+  delexec-ops remove-subagent --subagent-id <id>
+  delexec-ops enable-subagent --subagent-id <id>
+  delexec-ops disable-subagent --subagent-id <id>
+  delexec-ops submit-review
+  delexec-ops run-example [--text <text>]
+  delexec-ops doctor
+  delexec-ops debug-snapshot
 
 Compatibility:
-  croc-ops seller init
-  croc-ops seller register
-  croc-ops seller add-subagent ...
-  croc-ops seller start
-  croc-ops seller status
-  croc-ops seller doctor`);
+  delexec-ops seller init
+  delexec-ops seller register
+  delexec-ops seller add-subagent ...
+  delexec-ops seller start
+  delexec-ops seller status
+  delexec-ops seller doctor`);
 }
 
 function parseArgs(argv) {
@@ -669,7 +669,7 @@ async function commandBootstrap(args) {
           steps,
           seller_id: sellerId,
           subagent_id: LOCAL_EXAMPLE_SUBAGENT_ID,
-          next_action: "Approve seller and subagent, then rerun croc-ops bootstrap or croc-ops run-example.",
+          next_action: "Approve seller and subagent, then rerun delexec-ops bootstrap or delexec-ops run-example.",
           reason: approved.reason || "approval_failed"
         });
         return;
@@ -847,6 +847,6 @@ async function main() {
 }
 
 main().catch((error) => {
-  console.error(`[croc-ops] ${error instanceof Error ? error.message : "unknown_error"}`);
+  console.error(`[delexec-ops] ${error instanceof Error ? error.message : "unknown_error"}`);
   process.exit(1);
 });

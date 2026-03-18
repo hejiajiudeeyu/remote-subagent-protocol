@@ -4,7 +4,7 @@ import {
   isRspEmailSubject,
   normalizeEnvelope,
   RSP_EMAIL_SUBJECT_PREFIX
-} from "@croc/transport-email";
+} from "@delexec/transport-email";
 
 function base64UrlEncode(buffer) {
   return Buffer.from(buffer)

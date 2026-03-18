@@ -12,7 +12,7 @@ function usage() {
 
 Examples:
   npm run ops:auth -- register --email you@example.com
-  npm run ops:auth -- register --email you@example.com --platform http://127.0.0.1:8080 --output ~/.remote-subagent/.env.local`);
+  npm run ops:auth -- register --email you@example.com --platform http://127.0.0.1:8080 --output ~/.delexec/.env.local`);
 }
 
 function parseArgs(argv) {

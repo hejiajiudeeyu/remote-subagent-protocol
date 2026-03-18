@@ -1,11 +1,26 @@
 {
-  "name": "@croc/buyer-controller-core",
+  "name": "@delexec/buyer-controller-core",
   "version": "0.1.0",
-  "private": true,
+  "description": "Buyer controller core logic for delegated execution",
   "type": "module",
   "main": "src/index.js",
-  "exports": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "delegated-execution",
+    "buyer",
+    "core"
+  ],
   "dependencies": {
-    "@croc/contracts": "0.1.0"
+    "@delexec/contracts": "0.1.0"
   }
 }

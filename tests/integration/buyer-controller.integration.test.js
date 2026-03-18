@@ -1,14 +1,14 @@
 import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { createBuyerControllerServer } from "@croc/buyer-controller";
-import { createBuyerControllerServer as createBuyerControllerCoreServer } from "@croc/buyer-controller-core";
-import { canonicalizeResultPackageForSignature } from "@croc/contracts";
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
-import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
-import { createFunctionExecutor } from "@croc/seller-runtime-core";
-import { InMemoryEmailTransport } from "@croc/transport-email";
-import { createLocalTransportAdapter, createLocalTransportHub } from "@croc/transport-local";
+import { createBuyerControllerServer } from "@delexec/buyer-controller";
+import { createBuyerControllerServer as createBuyerControllerCoreServer } from "@delexec/buyer-controller-core";
+import { canonicalizeResultPackageForSignature } from "@delexec/contracts";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
+import { createSellerControllerServer, createSellerState } from "@delexec/seller-controller";
+import { createFunctionExecutor } from "@delexec/seller-runtime-core";
+import { InMemoryEmailTransport } from "@delexec/transport-email";
+import { createLocalTransportAdapter, createLocalTransportHub } from "@delexec/transport-local";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
 describe("buyer-controller integration", () => {

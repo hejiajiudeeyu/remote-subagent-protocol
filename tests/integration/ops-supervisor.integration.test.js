@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
 import { createOpsSupervisorServer } from "../../apps/ops/src/supervisor.js";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
@@ -30,7 +30,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-supervisor-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -70,12 +70,75 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
       delete process.env.OPS_PORT_BUYER;
       delete process.env.OPS_PORT_SELLER;
+    }
+  });
+
+  it("starts relay from an external command instead of a direct package entry", async () => {
+    const opsHome = fs.mkdtempSync(path.join(os.tmpdir(), "ops-supervisor-external-relay-"));
+    cleanupDirs.push(opsHome);
+    process.env.OPS_PORT_SUPERVISOR = String(36000 + Math.floor(Math.random() * 1000));
+    process.env.OPS_PORT_RELAY = String(37000 + Math.floor(Math.random() * 1000));
+    process.env.OPS_PORT_BUYER = String(38000 + Math.floor(Math.random() * 1000));
+    process.env.OPS_PORT_SELLER = String(39000 + Math.floor(Math.random() * 1000));
+
+    const relayScript = path.join(opsHome, "external-relay.mjs");
+    fs.writeFileSync(
+      relayScript,
+      `import http from "node:http";
+const port = Number(process.env.PORT || 0);
+const server = http.createServer((req, res) => {
+  if ((req.method || "GET") === "GET" && (req.url || "/") === "/healthz") {
+    res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+    res.end(JSON.stringify({ ok: true, service: process.env.SERVICE_NAME || "external-relay" }));
+    return;
+  }
+  res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+  res.end(JSON.stringify({ ok: true }));
+});
+server.listen(port, "127.0.0.1");
+`,
+      "utf8"
+    );
+
+    process.env.OPS_RELAY_BIN = process.execPath;
+    process.env.OPS_RELAY_ARGS = JSON.stringify([relayScript]);
+    process.env.DELEXEC_HOME = opsHome;
+
+    const supervisor = createOpsSupervisorServer();
+    supervisor.listen(0, "127.0.0.1");
+    await new Promise((resolve) => supervisor.once("listening", resolve));
+    const supervisorUrl = `http://127.0.0.1:${supervisor.address().port}`;
+    await jsonRequest(supervisorUrl, "/setup", { method: "POST", body: {} });
+    await supervisor.startManagedServices();
+
+    try {
+      const status = await waitFor(async () => {
+        const current = await jsonRequest(supervisorUrl, "/status");
+        if (current.body?.runtime?.relay?.health?.status !== 200) {
+          throw new Error("relay_not_ready");
+        }
+        return current;
+      });
+
+      expect(status.body.runtime.relay.managed).toBe(true);
+      expect(status.body.runtime.relay.launch_mode).toBe("configured_command");
+      expect(status.body.runtime.relay.health.status).toBe(200);
+    } finally {
+      await supervisor.stopManagedServices();
+      await closeServer(supervisor);
+      delete process.env.DELEXEC_HOME;
+      delete process.env.OPS_PORT_SUPERVISOR;
+      delete process.env.OPS_PORT_RELAY;
+      delete process.env.OPS_PORT_BUYER;
+      delete process.env.OPS_PORT_SELLER;
+      delete process.env.OPS_RELAY_BIN;
+      delete process.env.OPS_RELAY_ARGS;
     }
   });
 
@@ -90,7 +153,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-review-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -144,7 +207,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -164,7 +227,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-toggle-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -202,7 +265,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -222,7 +285,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-session-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -264,7 +327,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -284,7 +347,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-remove-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -316,7 +379,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -336,7 +399,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-debug-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -373,7 +436,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -393,7 +456,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-transport-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const emailEngineServer = await (async () => {
@@ -461,7 +524,7 @@ describe("ops supervisor integration", () => {
       await closeServer(emailEngineServer.server);
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -481,7 +544,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-gmail-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const originalFetch = globalThis.fetch;
@@ -564,7 +627,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;
@@ -584,7 +647,7 @@ describe("ops supervisor integration", () => {
     const platformState = createPlatformState();
     const platformServer = createPlatformServer({ serviceName: "platform-ops-example-test", state: platformState });
     const platformUrl = await listenServer(platformServer);
-    process.env.CROC_OPS_HOME = opsHome;
+    process.env.DELEXEC_HOME = opsHome;
     process.env.PLATFORM_API_BASE_URL = platformUrl;
 
     const supervisor = createOpsSupervisorServer();
@@ -624,7 +687,7 @@ describe("ops supervisor integration", () => {
       await supervisor.stopManagedServices();
       await closeServer(supervisor);
       await closeServer(platformServer);
-      delete process.env.CROC_OPS_HOME;
+      delete process.env.DELEXEC_HOME;
       delete process.env.PLATFORM_API_BASE_URL;
       delete process.env.OPS_PORT_SUPERVISOR;
       delete process.env.OPS_PORT_RELAY;

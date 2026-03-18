@@ -1,8 +1,31 @@
 {
-  "name": "@croc/contracts",
+  "name": "@delexec/contracts",
   "version": "0.1.0",
-  "private": true,
+  "description": "Protocol enums, error registry, canonicalization helpers, and packaged templates for remote subagent execution",
   "type": "module",
-  "main": "src/index.js",
-  "exports": "./src/index.js"
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json",
+    "./templates/manifest.json": "./templates/manifest.json"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "templates",
+    "protocol-docs"
+  ],
+  "scripts": {
+    "prepack": "node ../../scripts/stage-contracts-package-assets.mjs stage",
+    "postpack": "node ../../scripts/stage-contracts-package-assets.mjs cleanup"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "protocol",
+    "contracts",
+    "subagent",
+    "delegated-execution"
+  ]
 }

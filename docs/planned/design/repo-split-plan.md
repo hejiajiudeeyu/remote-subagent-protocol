@@ -6,21 +6,21 @@
 
 ## 2. npm scope
 
-拆分后所有包将从当前的 `@croc/` scope 迁移到与仓库命名体系对齐的新 scope。
+拆分后的包已经在 monorepo 内完成 `@delexec/` scope 收口，后续物理拆仓不再重新改名。
 
 | 项 | 当前值 | 拆分后目标 |
 | :--- | :--- | :--- |
-| npm scope | `@croc` | `@delexec`（待最终确认） |
-| CLI 入口 | `npx @croc/ops` | `npx @delexec/ops`（待最终确认） |
-| JWT issuer | `croc-platform-api` | 与新 scope 对齐 |
-| 本地数据目录 | `~/.remote-subagent/` | 待对齐（可保留或随 scope 更名） |
-| SQLite 文件名 | `croc.sqlite` | 待对齐 |
+| npm scope | `@delexec` | `@delexec` |
+| CLI 入口 | `npx @delexec/ops` | `npx @delexec/ops` |
+| JWT issuer | `delexec-platform-api` | `delexec-platform-api` |
+| 本地数据目录 | `~/.delexec/` | `~/.delexec/` |
+| SQLite 文件名 | `delexec.sqlite` | `delexec.sqlite` |
 
 迁移约束：
 
 - scope 变更是一次性的全局替换，涉及所有 `package.json`、import 路径、文档示例、CLI 入口和 JWT claims。
 - 应在拆分执行的同一批变更中完成，避免中间态。
-- 最终 scope 名称在执行拆分前确认，本文档暂以 `@delexec/` 作为占位。
+- scope、CLI、issuer 和本地状态命名已经定稿，不再作为拆仓前待决项。
 
 ## 3. 目标仓库
 

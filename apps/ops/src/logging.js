@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { ensureOpsDirectories, getOpsHomeDir } from "@croc/runtime-utils";
+import { ensureOpsDirectories, getOpsHomeDir } from "@delexec/runtime-utils";
 
 function nowIso() {
   return new Date().toISOString();

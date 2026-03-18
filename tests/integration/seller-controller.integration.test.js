@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-import { createPlatformServer, createPlatformState } from "@croc/platform-api";
-import { createSellerControllerServer, createSellerState } from "@croc/seller-controller";
-import { createFunctionExecutor, createSubagentRouterExecutor, startSellerHeartbeatLoop } from "@croc/seller-runtime-core";
-import { createLocalTransportAdapter, createLocalTransportHub } from "@croc/transport-local";
+import { createPlatformServer, createPlatformState } from "@delexec/platform-api";
+import { createSellerControllerServer, createSellerState } from "@delexec/seller-controller";
+import { createFunctionExecutor, createSubagentRouterExecutor, startSellerHeartbeatLoop } from "@delexec/seller-runtime-core";
+import { createLocalTransportAdapter, createLocalTransportHub } from "@delexec/transport-local";
 import { closeServer, jsonRequest, listenServer, waitFor } from "../helpers/http.js";
 
 describe("seller-controller integration", () => {

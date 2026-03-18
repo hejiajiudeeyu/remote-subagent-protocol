@@ -9,15 +9,15 @@
     "packages/transports/*"
   ],
   "scripts": {
-    "ops": "npm --workspace @croc/ops run start --",
-    "dev:platform": "npm --workspace @croc/platform-api run dev",
-    "dev:buyer": "npm --workspace @croc/buyer-controller run dev",
-    "dev:buyer-skill-adapter": "npm --workspace @croc/buyer-skill-adapter run dev",
-    "dev:seller": "npm --workspace @croc/seller-controller run dev",
-    "dev:relay": "npm --workspace @croc/transport-relay run dev",
-    "dev:ops-console": "npm --workspace @croc/ops-console run dev",
-    "dev:platform-console-gateway": "npm --workspace @croc/platform-console-gateway run dev",
-    "dev:platform-console": "npm --workspace @croc/platform-console run dev",
+    "ops": "npm --workspace @delexec/ops run start --",
+    "dev:platform": "npm --workspace @delexec/platform-api run dev",
+    "dev:buyer": "npm --workspace @delexec/buyer-controller run dev",
+    "dev:buyer-skill-adapter": "npm --workspace @delexec/buyer-skill-adapter run dev",
+    "dev:seller": "npm --workspace @delexec/seller-controller run dev",
+    "dev:relay": "npm --workspace @delexec/transport-relay run dev",
+    "dev:ops-console": "npm --workspace @delexec/ops-console run dev",
+    "dev:platform-console-gateway": "npm --workspace @delexec/platform-console-gateway run dev",
+    "dev:platform-console": "npm --workspace @delexec/platform-console run dev",
     "ops:auth": "node scripts/ops-auth.mjs",
     "start:playground": "python3 scripts/playground.py start",
     "start:playground:daemon": "python3 scripts/playground.py daemon",
@@ -37,13 +37,17 @@
     "test:smoke:seller": "node tests/smoke/seller-smoke.mjs",
     "test:compose-smoke": "node tests/smoke/compose-smoke.mjs",
     "test:public-stack-smoke": "node tests/smoke/public-stack-smoke.mjs",
+    "test:protocol:package": "node scripts/check-contracts-package.mjs",
+    "test:service:packages": "node scripts/check-service-packages.mjs",
+    "test:e2e:packages": "node scripts/check-packaged-e2e.mjs",
+    "test:naming-boundary": "node scripts/check-naming-boundary.mjs",
     "test:local-images-smoke": "COMPOSE_FILE=deploy/all-in-one/docker-compose.yml COMPOSE_ENV_FILE=deploy/all-in-one/.env.example COMPOSE_NO_BUILD=true node tests/smoke/compose-smoke.mjs",
     "test:published-images-smoke": "IMAGE_REGISTRY=${IMAGE_REGISTRY:-ghcr.io/hejiajiudeeyu} IMAGE_TAG=${IMAGE_TAG:-latest} COMPOSE_FILE=deploy/all-in-one/docker-compose.yml COMPOSE_ENV_FILE=deploy/all-in-one/.env.example COMPOSE_NO_BUILD=true node tests/smoke/compose-smoke.mjs",
     "test:compose-smoke:strict": "STRICT_COMPOSE_SMOKE=true node tests/smoke/compose-smoke.mjs",
     "test:release:docs": "node scripts/check-release-docs.mjs",
     "test:flow:dashboard": "python3 -m http.server 4173",
     "test:flow:summary": "node tests/reporters/flow-issue-reporter.mjs",
-    "test:ci": "npm run test && npm run test:compose-smoke:strict"
+    "test:ci": "npm run test && npm run test:protocol:package && npm run test:service:packages && npm run test:e2e:packages && npm run test:naming-boundary && npm run test:compose-smoke:strict"
   },
   "engines": {
     "node": ">=20"

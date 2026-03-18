@@ -138,7 +138,7 @@
 - `PLATFORM_API_BASE_URL=http://platform-api:8080`
 - `PLATFORM_API_KEY=...`
 - `DATABASE_URL=postgresql://...`
-- `SQLITE_DATABASE_PATH=./data/croc.sqlite`
+- `SQLITE_DATABASE_PATH=./data/delexec.sqlite`
 - `PORT=8080|8081|8082`
 - `SERVICE_NAME=platform-api|buyer-controller|seller-controller`
 - `SELLER_ID=seller_...`

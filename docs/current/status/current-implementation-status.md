@@ -41,7 +41,7 @@
 - [x] 测试可视化页面（`site/protocol-playground.html`，支持按 `flow_step_id` 高亮）
 - [x] docker compose 真实进程冒烟联调脚本（`tests/smoke/compose-smoke.mjs`）
 - [x] `ops-console` 本地轻会话（passphrase 解锁 + 短期 session）
-- [x] 本地加密 secret store（`~/.remote-subagent/secrets.enc.json`，`scrypt + AES-256-GCM`）
+- [x] 本地加密 secret store（`~/.delexec/secrets.enc.json`，`scrypt + AES-256-GCM`）
 - [x] `platform-console-gateway` 本地 operator gateway（浏览器不再直接持有 admin key）
 - [x] Buyer Skill Adapter 首版（`apps/buyer-skill-adapter`）
 - [x] 官方 example subagent、本地 self-call 路径与 coding-agent bootstrap

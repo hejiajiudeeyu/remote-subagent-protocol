@@ -50,7 +50,7 @@ export function renderSetupWizardMarkup(status) {
     {
       title: "Setup Local Client",
       done: Boolean(status?.runtime?.supervisor?.port),
-      detail: "Initialize ~/.remote-subagent and local supervisor defaults.",
+      detail: "Initialize ~/.delexec and local supervisor defaults.",
       action: "setup",
       actionLabel: "Run Setup"
     },

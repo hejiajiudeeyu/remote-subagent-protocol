@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canonicalizeResultPackageForSignature } from "@croc/contracts";
+import { canonicalizeResultPackageForSignature } from "@delexec/contracts";
 
 describe("canonicalizeResultPackageForSignature (extended)", () => {
   it("returns empty object for undefined input", () => {

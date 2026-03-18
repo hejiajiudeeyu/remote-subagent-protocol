@@ -3,7 +3,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ERROR_DOMAIN, ERROR_REGISTRY, isKnownErrorCode } from "@croc/contracts";
+import { ERROR_DOMAIN, ERROR_REGISTRY, isKnownErrorCode } from "@delexec/contracts";
 
 const ROOT = process.cwd();
 const SEARCH_ROOTS = ["apps", "packages"];

@@ -43,20 +43,20 @@ Hook support can exist later as a thin variant of the `process` adapter, but it 
 
 The current user-facing package is:
 
-- `@croc/ops`
+- `@delexec/ops`
 
 The current product-path commands are:
 
 ```bash
-npx @croc/ops setup
-npx @croc/ops auth register
-npx @croc/ops add-subagent
-npx @croc/ops submit-review
-npx @croc/ops enable-seller
-npx @croc/ops start
-npx @croc/ops status
-npx @croc/ops doctor
-npx @croc/ops debug-snapshot
+npx @delexec/ops setup
+npx @delexec/ops auth register
+npx @delexec/ops add-subagent
+npx @delexec/ops submit-review
+npx @delexec/ops enable-seller
+npx @delexec/ops start
+npx @delexec/ops status
+npx @delexec/ops doctor
+npx @delexec/ops debug-snapshot
 ```
 
 Compatibility aliases still exist for some legacy `seller ...` subcommands, but they are no longer the documented primary path.
@@ -115,8 +115,8 @@ The unified ops client uses a stable local config, separate from ad-hoc env-only
 
 Recommended files:
 
-- `~/.remote-subagent/.env.local`
-- `~/.remote-subagent/ops.config.json`
+- `~/.delexec/.env.local`
+- `~/.delexec/ops.config.json`
 
 `.env.local` remains the simple key/value runtime file:
 
@@ -191,7 +191,7 @@ Use it for:
 Suggested CLI example:
 
 ```bash
-npx @croc/ops add-subagent \
+npx @delexec/ops add-subagent \
   --type process \
   --subagent-id local.summary.v1 \
   --display-name "Local Summary Agent" \
@@ -257,7 +257,7 @@ Use it when the local capability already exists as a service.
 Suggested CLI example:
 
 ```bash
-npx @croc/ops add-subagent \
+npx @delexec/ops add-subagent \
   --type http \
   --subagent-id local.extractor.v1 \
   --display-name "Local Extractor API" \
@@ -297,13 +297,13 @@ Support both:
 Interactive:
 
 ```bash
-npx @croc/ops add-subagent
+npx @delexec/ops add-subagent
 ```
 
 Declarative:
 
 ```bash
-npx @croc/ops add-subagent --config ./subagent.json
+npx @delexec/ops add-subagent --config ./subagent.json
 ```
 
 Declarative mode is important for coding-agent installation flows.

@@ -2,10 +2,14 @@
 
 This repository uses a minimal L0 release process.
 
+The repository is still a monorepo, but pre-split release validation now has a dedicated protocol-package lane in addition to the implementation image lanes.
+
 ## Goals
 
 - produce versioned container images for `platform`, `buyer`, `seller`, and `relay`
+- produce a release-shaped protocol package for `@delexec/contracts`
 - validate both source-build compose paths and image-based compose paths
+- validate that protocol templates/docs can be consumed from a packed artifact instead of a monorepo-relative path
 - keep the release bar small enough for L0 while preserving repeatability
 
 ## Image Tags
@@ -18,8 +22,9 @@ Recommended tags:
 
 ## CI Expectations
 
-- `CI` runs unit, integration, e2e, deploy-config, standalone deploy smoke, public-stack smoke, and compose smoke
+- `CI` runs protocol, client, and platform lanes, with packaging and smoke gates mapped to future three-repo ownership
 - `CI` also runs a local image-based smoke against `deploy/all-in-one` using release-shaped image coordinates
+- `CI` runs a naming-boundary check so legacy names cannot leak back outside the approved migration documents
 - `Published Images Smoke` is the GHCR-facing validation path for already-published images
 - `Images` builds release images on pull requests and can push them on release tags or manual dispatch
 - `CI` checks that the current repository version has a matching release note file and compatibility matrix entry
@@ -30,11 +35,14 @@ Recommended tags:
 ## Recommended Release Steps
 
 1. cut a version tag such as `v0.1.0`
-2. let the `Images` workflow publish `rsp-platform`, `rsp-buyer`, `rsp-seller`, and `rsp-relay`
-3. ensure `docs/archive/releases/vX.Y.Z.md` exists and `docs/archive/releases/compatibility-matrix.md` includes the tag
-4. verify the matching `Published Images Smoke` workflow passed against GHCR
-5. update any external deployment environment to the released `IMAGE_TAG`
-6. ensure the current readiness boundary still matches `docs/current/guides/product-readiness-boundary.md`
+2. run the protocol package check and confirm `@delexec/contracts` still packs, installs, and exposes bundled templates/docs
+3. run the packaged-service check and confirm `platform` / `buyer` / `seller` / `relay` tarballs still install and boot in a clean room
+4. run the packaged-e2e check and confirm the full e2e suite still passes with installed tarball commands injected through `E2E_*_CMD`
+5. let the `Images` workflow publish `rsp-platform`, `rsp-buyer`, `rsp-seller`, and `rsp-relay`
+6. ensure `docs/archive/releases/vX.Y.Z.md` exists and `docs/archive/releases/compatibility-matrix.md` includes the tag
+7. verify the matching `Published Images Smoke` workflow passed against GHCR
+8. update any external deployment environment to the released `IMAGE_TAG`
+9. ensure the current readiness boundary still matches `docs/current/guides/product-readiness-boundary.md`
 
 ## Compose Smoke Failure Classes
 
@@ -54,3 +62,26 @@ For L0, compatibility is tracked at the repository release level:
 - one repository version maps to one image tag set
 - mixed-version deployments are not yet part of the support promise
 - the compatibility matrix is recorded in `docs/archive/releases/compatibility-matrix.md`
+
+## Protocol Package Note
+
+Pre-split packaging rules for `@delexec/contracts`:
+
+- the package name is already frozen as `@delexec/contracts`
+- the package must stay independently `npm pack`-able from the monorepo root
+- the packed artifact must include `templates/manifest.json` and the protocol doc snapshot under `protocol-docs/`
+- client/platform-side code should converge on consuming the packaged protocol artifact instead of reading `docs/templates` directly
+
+## Pre-Split Compatibility Gate
+
+Pre-split release validation now has three packaging gates:
+
+- `npm run test:protocol:package`
+- `npm run test:service:packages`
+- `npm run test:e2e:packages`
+
+Together they verify:
+
+- the protocol artifact is installable and exports bundled templates/docs
+- the implementation service artifacts are installable and bootable
+- the end-to-end flow passes when services are started from installed tarball commands instead of source entrypoints

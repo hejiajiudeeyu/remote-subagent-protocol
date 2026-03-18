@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createGmailTransportAdapter } from "@croc/transport-gmail";
+import { createGmailTransportAdapter } from "@delexec/transport-gmail";
 
 describe("gmail transport integration", () => {
   afterEach(() => {

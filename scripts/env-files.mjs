@@ -13,4 +13,4 @@ export {
   buildOpsEnvSearchPaths,
   readJsonFile,
   writeJsonFile
-} from "@croc/runtime-utils";
+} from "@delexec/runtime-utils";

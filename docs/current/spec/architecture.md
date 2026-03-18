@@ -490,7 +490,7 @@ Buyer Agent -> Buyer Controller 超时决策接口（内部接口）建议：
 ## 8. 错误码体系（v0.1）
 
 实现规则：
-- 标准错误码与默认 `retryable` 语义以 `@croc/contracts` 中的中心注册表为准。
+- 标准错误码与默认 `retryable` 语义以 `@delexec/contracts` 中的中心注册表为准。
 - 说明层文档只描述域与代表性错误，不再手工维护完整散列清单。
 
 建议错误码前缀分域：

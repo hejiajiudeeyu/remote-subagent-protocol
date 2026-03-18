@@ -5,10 +5,6 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const ROOT_DIR = path.resolve(__dirname, "..");
-const OPS_DIR = path.join(ROOT_DIR, "apps/ops");
-const STAGED_NODE_MODULES_DIR = path.join(OPS_DIR, "node_modules");
-const STAGED_NAMESPACE_DIR = path.join(STAGED_NODE_MODULES_DIR, "@croc");
-const STAGE_MARKER = path.join(STAGED_NODE_MODULES_DIR, ".workspace-bundle-stage.json");
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -89,27 +85,42 @@ function workspacePackageIndex() {
   return index;
 }
 
-function stageBundledWorkspaces() {
-  const opsManifest = readJson(path.join(OPS_DIR, "package.json"));
-  const bundledDependencies = Array.isArray(opsManifest.bundleDependencies) ? opsManifest.bundleDependencies : [];
+function resolveTargetDir() {
+  const relativeTarget = process.argv[3] || "apps/ops";
+  return path.resolve(ROOT_DIR, relativeTarget);
+}
+
+function buildTargetPaths(targetDir) {
+  const stagedNodeModulesDir = path.join(targetDir, "node_modules");
+  const stageMarker = path.join(stagedNodeModulesDir, ".workspace-bundle-stage.json");
+  return {
+    targetDir,
+    stagedNodeModulesDir,
+    stageMarker
+  };
+}
+
+function stageBundledWorkspaces(targetDir) {
+  const targetManifest = readJson(path.join(targetDir, "package.json"));
+  const bundledDependencies = Array.isArray(targetManifest.bundleDependencies) ? targetManifest.bundleDependencies : [];
   const workspaceIndex = workspacePackageIndex();
   const staged = [];
-
-  ensureDir(STAGED_NAMESPACE_DIR);
+  const { stageMarker } = buildTargetPaths(targetDir);
 
   for (const packageName of bundledDependencies) {
     const workspacePackage = workspaceIndex.get(packageName);
     if (!workspacePackage) {
       throw new Error(`workspace_bundle_package_not_found:${packageName}`);
     }
-    const scopedName = packageName.split("/")[1];
-    const targetDir = path.join(STAGED_NAMESPACE_DIR, scopedName);
-    removePath(targetDir);
-    copyDir(workspacePackage.dir, targetDir);
-    staged.push(targetDir);
+    const segments = packageName.split("/");
+    const dependencyTargetDir = path.join(targetDir, "node_modules", ...segments);
+    ensureDir(path.dirname(dependencyTargetDir));
+    removePath(dependencyTargetDir);
+    copyDir(workspacePackage.dir, dependencyTargetDir);
+    staged.push(dependencyTargetDir);
   }
 
-  writeJson(STAGE_MARKER, {
+  writeJson(stageMarker, {
     staged_at: new Date().toISOString(),
     staged
   });
@@ -117,31 +128,29 @@ function stageBundledWorkspaces() {
   return staged;
 }
 
-function cleanupBundledWorkspaces() {
-  if (!fs.existsSync(STAGE_MARKER)) {
+function cleanupBundledWorkspaces(targetDir) {
+  const { stagedNodeModulesDir, stageMarker } = buildTargetPaths(targetDir);
+  if (!fs.existsSync(stageMarker)) {
     return;
   }
-  const marker = readJson(STAGE_MARKER);
+  const marker = readJson(stageMarker);
   for (const stagedPath of marker.staged || []) {
-    if (typeof stagedPath === "string" && stagedPath.startsWith(STAGED_NAMESPACE_DIR)) {
+    if (typeof stagedPath === "string" && stagedPath.startsWith(stagedNodeModulesDir)) {
       removePath(stagedPath);
     }
   }
-  removePath(STAGE_MARKER);
-
-  if (fs.existsSync(STAGED_NAMESPACE_DIR) && fs.readdirSync(STAGED_NAMESPACE_DIR).length === 0) {
-    removePath(STAGED_NAMESPACE_DIR);
-  }
-  if (fs.existsSync(STAGED_NODE_MODULES_DIR) && fs.readdirSync(STAGED_NODE_MODULES_DIR).length === 0) {
-    removePath(STAGED_NODE_MODULES_DIR);
+  removePath(stageMarker);
+  if (fs.existsSync(stagedNodeModulesDir) && fs.readdirSync(stagedNodeModulesDir).length === 0) {
+    removePath(stagedNodeModulesDir);
   }
 }
 
 const action = process.argv[2] || "stage";
+const targetDir = resolveTargetDir();
 if (action === "stage") {
-  stageBundledWorkspaces();
+  stageBundledWorkspaces(targetDir);
 } else if (action === "cleanup") {
-  cleanupBundledWorkspaces();
+  cleanupBundledWorkspaces(targetDir);
 } else {
   throw new Error(`unsupported_bundle_workspace_action:${action}`);
 }

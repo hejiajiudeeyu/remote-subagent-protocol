@@ -1,21 +1,56 @@
 {
-  "name": "@croc/seller-controller",
+  "name": "@delexec/seller-controller",
   "version": "0.1.0",
-  "private": true,
+  "description": "Seller controller service for delegated execution clients",
   "type": "module",
+  "bin": {
+    "delexec-seller-controller": "src/server.js",
+    "croc-seller-controller": "src/server.js"
+  },
+  "bundleDependencies": [
+    "@delexec/contracts",
+    "@delexec/postgres-store",
+    "@delexec/runtime-utils",
+    "@delexec/seller-runtime-core",
+    "@delexec/sqlite-store",
+    "@delexec/transport-email",
+    "@delexec/transport-emailengine",
+    "@delexec/transport-gmail",
+    "@delexec/transport-relay-http"
+  ],
   "main": "src/server.js",
-  "exports": "./src/server.js",
+  "exports": {
+    ".": "./src/server.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
   "scripts": {
+    "prepack": "node ../../scripts/bundle-workspace-deps.mjs stage apps/seller-controller",
+    "postpack": "node ../../scripts/bundle-workspace-deps.mjs cleanup apps/seller-controller",
     "start": "node src/server.js",
     "dev": "node --watch src/server.js"
   },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "delegated-execution",
+    "seller",
+    "controller"
+  ],
   "dependencies": {
-    "@croc/postgres-store": "0.1.0",
-    "@croc/runtime-utils": "0.1.0",
-    "@croc/seller-runtime-core": "0.1.0",
-    "@croc/sqlite-store": "0.1.0",
-    "@croc/transport-emailengine": "0.1.0",
-    "@croc/transport-gmail": "0.1.0",
-    "@croc/transport-relay-http": "0.1.0"
+    "@delexec/postgres-store": "0.1.0",
+    "@delexec/runtime-utils": "0.1.0",
+    "@delexec/seller-runtime-core": "0.1.0",
+    "@delexec/sqlite-store": "0.1.0",
+    "@delexec/transport-email": "0.1.0",
+    "@delexec/transport-emailengine": "0.1.0",
+    "@delexec/transport-gmail": "0.1.0",
+    "@delexec/transport-relay-http": "0.1.0",
+    "better-sqlite3": "^12.6.2",
+    "pg": "^8.20.0"
   }
 }

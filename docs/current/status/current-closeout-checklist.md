@@ -31,7 +31,7 @@ This checklist tracks the remaining work before the current implementation can b
 - `partial` role model exists, but is still minimal and not yet fully productized
 - `done` basic local login/session flow for `ops-console` through passphrase-backed supervisor sessions
 - `done` browser no longer stores platform admin key directly; `platform-console` now uses a local gateway with its own short-lived session
-- `done` encrypted local secret storage via `~/.remote-subagent/secrets.enc.json`
+- `done` encrypted local secret storage via `~/.delexec/secrets.enc.json`
 - `partial` credential storage is now encrypted locally, but is not yet backed by OS keychain / managed secret systems
 
 ## Platform Operations
@@ -53,7 +53,7 @@ This checklist tracks the remaining work before the current implementation can b
 - `done` seller background inbox and heartbeat loops
 - `done` buyer/seller shared console MVP
 - `done` ops console supports registration, seller enablement, dispatch, setup wizard guidance, and richer result/runtime views
-- `done` seller local config path established at `~/.remote-subagent`
+- `done` seller local config path established at `~/.delexec`
 - `done` unified ops client exists for setup/start/status/add-subagent/submit-review/enable-seller/doctor
 - `done` local supervisor exists and manages buyer, seller, and relay in the end-user path
 - `done` richer request timeline and result views
